@@ -17,9 +17,31 @@ pre = "declare void @printInt(i32) ; \n define i32 @main() { \n "
 post :: String
 post = "ret i32 0 \n }"
 
-type LLVMonad a = ReaderT (Map Ident String) (State Int) a
+type Register = String
+data Loc = LocReg Register | LocAddress Register
+data LLVMRep = XD
+type LLVMonad a = ReaderT (Map Ident Loc, Map Ident Type) (StateT Int (Writer [LLVMRep])) a
+--map ident type żeby wiedzieć czy plus to na inty czy str. wszystkie topdefy i wszystkie zmienne
+--update widoczność zmiennych -> B locktoLLVM
 
-freshRegister :: LLVMonad String
+runLLVMonad :: LLVMonad a -> [LLVMRep]
+-- runreader evalstate execwriter
+
+generateCode :: [LLVMRep] -> String
+
+programToLLVM :: Program -> String
+
+topDefToLLVM :: TopDef -> LLVMonad ()
+
+blockToLLVM :: Block -> LLVMonad ()
+
+stmtToLLVM :: Stmt -> LLVMonad ()
+
+exprToLLVM :: Expr -> LLVMonad Loc
+
+
+
+freshRegister :: LLVMonad Register
 freshRegister = do
   oldRegister <- get
   put $ oldRegister + 1
