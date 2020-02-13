@@ -59,7 +59,7 @@ data Expr
   deriving (Eq, Ord, Show, Read)
 
 data AddOp = Plus | Minus
-  deriving (Eq, Ord, Show, Read)
+  deriving (Eq, Ord, Show, Read)pro
 
 data MulOp = Times | Div | Mod
   deriving (Eq, Ord, Show, Read)
