@@ -1,4 +1,11 @@
-.stack-work/
-latteproject.cabal
-.idea
-*~
+*.hi
+*.o
+*.ll
+*.bc
+TestLatte
+latc_llvm
+latc
+LexLatte.hs
+ParLatte.hs
+*.bak
+ks386105.tar.gz
