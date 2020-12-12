@@ -64,7 +64,7 @@ checkTopDef :: TopDef Location -> TypeMonad ()
 
 checkTopDef (FnDef _ t ident args block) = do
   let newVars = Map.fromList (map makePair args)
-  local (first (Map.union newVars))  $ checkBlock block
+  local ((first (Map.union newVars)).(second $ const $ convertType t))  $ checkBlock block
 
 getIdent :: Item a -> Ident
 getIdent (NoInit _ i) = i
