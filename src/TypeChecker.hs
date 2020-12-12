@@ -65,7 +65,10 @@ checkTopDef :: TopDef Location -> TypeMonad ()
 checkTopDef (FnDef loc t ident args block) = do
   let newVars = Map.fromList (map makePair args)
   unless ((Map.size newVars) == length(args)) $ throwError (loc, "repeating identifiers")
-  local ((first (Map.union newVars)).(second $ const $ convertType t))  $ checkBlock block
+  res <- local ((first (Map.union newVars)).(second $ const $ convertType t)) $ checkBlock block
+  case t of
+    Latte.Void _ -> return ()
+    _ -> unless res $ throwError (loc, "missing return")
 
 getIdent :: Item a -> Ident
 getIdent (NoInit _ i) = i
@@ -77,8 +80,8 @@ first f ~(a, b) = (f a, b)
 second :: (b -> c) -> (a, b) -> (a, c)
 second f ~(a, b) = (a, f b)
 
-checkBlock :: Block Location -> TypeMonad ()
-checkBlock (Block _ []) = return ()
+checkBlock :: Block Location -> TypeMonad Bool
+checkBlock (Block _ []) = return False
 checkBlock (Block loc (stmt@(Decl _ t item):tail)) = do
   let newVars = Map.fromList (zip (map getIdent item) (repeat (convertType t)))
   unless ((Map.size newVars) == length(item)) $ throwError (loc, "repeating identifiers")
@@ -86,8 +89,9 @@ checkBlock (Block loc (stmt@(Decl _ t item):tail)) = do
   local (first (Map.union newVars) ) ( checkBlock (Block loc tail))
 
 checkBlock(Block loc (head:tail)) = do
-  checkStmt head
-  checkBlock (Block loc tail)
+  res1 <- checkStmt head
+  res2 <- checkBlock (Block loc tail)
+  return (res1 || res2)
 
 
 -- TODO loc
@@ -97,48 +101,66 @@ getType i loc = do
   let Ident s = i
   unless (Map.member i r) $ throwError (loc, "undefined identifier: " ++ s)
   return (r ! i)
-checkStmt :: Stmt Location -> TypeMonad()
-checkStmt (Empty _) = return ()
+
+checkStmt :: Stmt Location -> TypeMonad Bool
+checkStmt (Empty _) = return False
 checkStmt (BStmt _ b) = checkBlock b
-checkStmt (Decl _ t i) = mapM_ (checkItem $ convertType t) i
+checkStmt (Decl _ t i) = do mapM_ (checkItem $ convertType t) i; return False
 checkStmt (Ass loc ident expr) = do
   t <- checkExpr expr
   ti <- getType ident loc
   unless (t == ti) $ throwError (loc, "wrong types")
+  return False
+
 checkStmt (Incr loc ident) = do
   t <- getType ident loc
   unless (t == TCInt) $ throwError (loc, "wrong type for increasing")
+  return False
 
 checkStmt (Decr loc ident) = do
   t <- getType ident loc
   unless (t == TCInt) $ throwError (loc, "wrong type for decreasing")
+  return False
 
 checkStmt (Ret loc expr) = do
   t <- checkExpr expr
   tret <- asks snd
   unless (t == tret) $ throwError (loc, "wrong type returned")
+  return True
 
 checkStmt (VRet loc) = do
   t <- asks snd
   unless (t == TCVoid) $ throwError (loc, "wrong type returned")
+  return True
 
 checkStmt (Cond loc expr stmt) = do
   t <- checkExpr expr
   unless (t == TCBool) $ throwError (loc, "wrong type of logic condition")
-  checkStmt stmt
+  res <- checkStmt stmt
+  case expr of 
+    ELitTrue _ -> return res
+    _ -> return False
 
 checkStmt (CondElse loc expr stmt1 stmt2) = do
   t <- checkExpr expr
   unless (t == TCBool) $ throwError (loc, "wrong type of logic condition")
-  checkStmt stmt1
-  checkStmt stmt2
+  res1 <- checkStmt stmt1
+  res2 <- checkStmt stmt2
+  case expr of
+    ELitTrue _ -> return res1
+    ELitFalse _ -> return res2
+    _ -> return (res1 && res2)
 
 checkStmt (While loc expr stmt) = do
   t <- checkExpr expr
   unless (t == TCBool) $ throwError (loc, "wrong type of logic condition")
-  checkStmt stmt
+  res <- checkStmt stmt
+  case expr of
+    ELitTrue _ -> return True
+    _ -> return False
 
-checkStmt (SExp _ expr) = do checkExpr expr; return ()
+
+checkStmt (SExp _ expr) = do checkExpr expr; return False
 
 
 checkItem :: TCType -> Item Location -> TypeMonad()
