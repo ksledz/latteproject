@@ -5,45 +5,48 @@
 {-# OPTIONS_GHC -w #-}
 module LexLatte where
 
-
-
 import qualified Data.Bits
 import Data.Word (Word8)
 import Data.Char (ord)
 }
 
 
-$l = [a-zA-Z\192 - \255] # [\215 \247]    -- isolatin1 letter FIXME
-$c = [A-Z\192-\221] # [\215]    -- capital isolatin1 letter FIXME
-$s = [a-z\222-\255] # [\247]    -- small isolatin1 letter FIXME
-$d = [0-9]                -- digit
-$i = [$l $d _ ']          -- identifier character
-$u = [\0-\255]          -- universal: any character
+$c = [A-Z\192-\221] # [\215]  -- capital isolatin1 letter (215 = \times) FIXME
+$s = [a-z\222-\255] # [\247]  -- small   isolatin1 letter (247 = \div  ) FIXME
+$l = [$c $s]         -- letter
+$d = [0-9]           -- digit
+$i = [$l $d _ ']     -- identifier character
+$u = [. \n]          -- universal: any character
 
 @rsyms =    -- symbols and non-identifier-like reserved words
    \( | \) | \, | \{ | \} | \; | \= | \+ \+ | \- \- | \[ \] | \[ | \] | \- | \! | \& \& | \| \| | \+ | \* | \/ | \% | \< | \< \= | \> | \> \= | \= \= | \! \=
 
 :-
-"#" [.]* ; -- Toss single line comments
-"//" [.]* ; -- Toss single line comments
-"/*" ([$u # \*] | \*+ [$u # [\* \/]])* ("*")+ "/" ;
+
+-- Line comments
+"#" [.]* ;
+"//" [.]* ;
+
+-- Block comments
+\/ \* [$u # \*]* \* ([$u # [\* \/]] [$u # \*]* \* | \*)* \/ ;
 
 $white+ ;
-@rsyms { tok (\p s -> PT p (eitherResIdent (TV . share) s)) }
+@rsyms
+    { tok (\p s -> PT p (eitherResIdent TV s)) }
 
-$l $i*   { tok (\p s -> PT p (eitherResIdent (TV . share) s)) }
-\" ([$u # [\" \\ \n]] | (\\ (\" | \\ | \' | n | t)))* \"{ tok (\p s -> PT p (TL $ share $ unescapeInitTail s)) }
+$l $i*
+    { tok (\p s -> PT p (eitherResIdent TV s)) }
+\" ([$u # [\" \\ \n]] | (\\ (\" | \\ | \' | n | t | r | f)))* \"
+    { tok (\p s -> PT p (TL $ unescapeInitTail s)) }
 
-$d+      { tok (\p s -> PT p (TI $ share s))    }
+$d+
+    { tok (\p s -> PT p (TI s))    }
 
 
 {
 
 tok :: (Posn -> String -> Token) -> (Posn -> String -> Token)
 tok f p s = f p s
-
-share :: String -> String
-share = id
 
 data Tok =
    TS !String !Int    -- reserved words and symbols
@@ -60,10 +63,12 @@ data Token =
  | Err Posn
   deriving (Eq,Show,Ord)
 
+printPosn :: Posn -> String
+printPosn (Pn _ l c) = "line " ++ show l ++ ", column " ++ show c
+
 tokenPos :: [Token] -> String
-tokenPos (PT (Pn _ l _) _ :_) = "line " ++ show l
-tokenPos (Err (Pn _ l _) :_) = "line " ++ show l
-tokenPos _ = "end of file"
+tokenPos (t:_) = printPosn (tokenPosn t)
+tokenPos [] = "end of file"
 
 tokenPosn :: Token -> Posn
 tokenPosn (PT p _) = p
@@ -76,17 +81,20 @@ posLineCol :: Posn -> (Int, Int)
 posLineCol (Pn _ l c) = (l,c)
 
 mkPosToken :: Token -> ((Int, Int), String)
-mkPosToken t@(PT p _) = (posLineCol p, prToken t)
+mkPosToken t@(PT p _) = (posLineCol p, tokenText t)
 
-prToken :: Token -> String
-prToken t = case t of
+tokenText :: Token -> String
+tokenText t = case t of
   PT _ (TS s _) -> s
   PT _ (TL s)   -> show s
   PT _ (TI s)   -> s
   PT _ (TV s)   -> s
   PT _ (TD s)   -> s
   PT _ (TC s)   -> s
+  Err _         -> "#error"
 
+prToken :: Token -> String
+prToken t = tokenText t
 
 data BTree = N | B String Tok BTree BTree deriving (Show)
 
@@ -100,15 +108,18 @@ eitherResIdent tv s = treeFind resWords
 
 resWords :: BTree
 resWords = b ">" 19 (b "," 10 (b "(" 5 (b "%" 3 (b "!=" 2 (b "!" 1 N N) N) (b "&&" 4 N N)) (b "+" 8 (b "*" 7 (b ")" 6 N N) N) (b "++" 9 N N))) (b "<" 15 (b "/" 13 (b "--" 12 (b "-" 11 N N) N) (b ";" 14 N N)) (b "=" 17 (b "<=" 16 N N) (b "==" 18 N N)))) (b "new" 29 (b "boolean" 24 (b "[]" 22 (b "[" 21 (b ">=" 20 N N) N) (b "]" 23 N N)) (b "if" 27 (b "false" 26 (b "else" 25 N N) N) (b "int" 28 N N))) (b "while" 34 (b "true" 32 (b "string" 31 (b "return" 30 N N) N) (b "void" 33 N N)) (b "||" 36 (b "{" 35 N N) (b "}" 37 N N))))
-   where b s n = let bs = id s
-                  in B bs (TS bs n)
+   where b s n = let bs = s
+                 in  B bs (TS bs n)
 
 unescapeInitTail :: String -> String
-unescapeInitTail = id . unesc . tail . id where
+unescapeInitTail = id . unesc . tail . id
+  where
   unesc s = case s of
     '\\':c:cs | elem c ['\"', '\\', '\''] -> c : unesc cs
     '\\':'n':cs  -> '\n' : unesc cs
     '\\':'t':cs  -> '\t' : unesc cs
+    '\\':'r':cs  -> '\r' : unesc cs
+    '\\':'f':cs  -> '\f' : unesc cs
     '"':[]    -> []
     c:cs      -> c : unesc cs
     _         -> []
@@ -150,7 +161,7 @@ tokens str = go (alexStartPos, '\n', [], str)
 alexGetByte :: AlexInput -> Maybe (Byte,AlexInput)
 alexGetByte (p, c, (b:bs), s) = Just (b, (p, c, bs, s))
 alexGetByte (p, _, [], s) =
-  case  s of
+  case s of
     []  -> Nothing
     (c:s) ->
              let p'     = alexMove p c
