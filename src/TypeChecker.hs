@@ -2,12 +2,10 @@ module TypeChecker (checkTypes) where
 
 import Data.Map (Map, (!))
 import qualified Data.Map as Map
-import qualified Data.Char as Char
-import Control.Monad (void)
+import qualified Data.Set as Set
+import Data.Set (Set)
 import Control.Monad.Reader
-import Control.Monad.State
 import Control.Monad.Except
-import Data.Void
 
 import AbsLatte
 import qualified AbsLatte as Latte
@@ -65,7 +63,7 @@ checkTopDef :: TopDef Location -> TypeMonad ()
 checkTopDef (FnDef loc t ident args block) = do
   let newVars = Map.fromList (map makePair args)
   unless ((Map.size newVars) == length(args)) $ throwError (loc, "repeating identifiers")
-  res <- local ((first (Map.union newVars)).(second $ const $ convertType t)) $ checkBlock block
+  res <- local ((first (Map.union newVars)).(second $ const $ convertType t)) $ checkBlock block Set.empty
   case t of
     Latte.Void _ -> return ()
     _ -> unless res $ throwError (loc, "missing return")
@@ -80,21 +78,22 @@ first f ~(a, b) = (f a, b)
 second :: (b -> c) -> (a, b) -> (a, c)
 second f ~(a, b) = (a, f b)
 
-checkBlock :: Block Location -> TypeMonad Bool
-checkBlock (Block _ []) = return False
-checkBlock (Block loc (stmt@(Decl _ t item):tail)) = do
+checkBlock :: Block Location -> Set Ident -> TypeMonad Bool
+checkBlock (Block _ []) _ = return False
+checkBlock (Block loc (stmt@(Decl _ t item):tail)) lVars = do
   let newVars = Map.fromList (zip (map getIdent item) (repeat (convertType t)))
   unless ((Map.size newVars) == length(item)) $ throwError (loc, "repeating identifiers")
   checkStmt stmt
-  local (first (Map.union newVars) ) ( checkBlock (Block loc tail))
+  when (any (\i -> Set.member(getIdent i) lVars) item ) $ throwError (loc, "redefined variable")
+  let newLVars = Set.union lVars (Set.fromList (map getIdent item))
+  local (first (Map.union newVars) ) ( checkBlock (Block loc tail) newLVars)
 
-checkBlock(Block loc (head:tail)) = do
+checkBlock(Block loc (head:tail)) lVars = do
   res1 <- checkStmt head
-  res2 <- checkBlock (Block loc tail)
+  res2 <- checkBlock (Block loc tail) lVars
   return (res1 || res2)
 
 
--- TODO loc
 getType :: Ident -> Location -> TypeMonad TCType
 getType i loc = do
   r <- asks fst
@@ -104,7 +103,7 @@ getType i loc = do
 
 checkStmt :: Stmt Location -> TypeMonad Bool
 checkStmt (Empty _) = return False
-checkStmt (BStmt _ b) = checkBlock b
+checkStmt (BStmt _ b) = checkBlock b Set.empty
 checkStmt (Decl _ t i) = do mapM_ (checkItem $ convertType t) i; return False
 checkStmt (Ass loc ident expr) = do
   t <- checkExpr expr
