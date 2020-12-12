@@ -5,7 +5,7 @@ TestLatte: src/ParLatte.hs src/LexLatte.hs src/TestLatte.hs
 	ghc -isrc --make src/TestLatte.hs -o TestLatte
 
 latc: src/ParLatte.hs src/LexLatte.hs src/Main.hs src/TypeChecker.hs
-	ghc -isrc --make src/Main.hs -o insc_llvm
+	ghc -isrc --make src/Main.hs -o latc
 	
 
 

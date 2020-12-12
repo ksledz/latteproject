@@ -1,4 +1,4 @@
-module TypeChecker () where
+module TypeChecker (checkTypes) where
 
 import Data.Map (Map, (!))
 import qualified Data.Map as Map
@@ -12,47 +12,54 @@ import Data.Void
 import AbsLatte
 import qualified AbsLatte as Latte
 
-type TypeMonad a = ReaderT (Map Ident Type, Type) (Except String) a
+data TCType = TCInt | TCStr | TCBool | TCVoid | TCFun TCType [TCType] deriving Eq
+
+type TypeMonad a = ReaderT (Map Ident TCType, TCType) (Except String) a
 
 runTypeMonad :: TypeMonad a -> Either String a
-runTypeMonad a = runExcept $ runReaderT a
+runTypeMonad a = runExcept $ runReaderT a  (Map.empty, TCVoid) 
 
-checkTypes :: Program -> Bool
+checkTypes :: Program a -> Either String ()
 
 checkTypes a = runTypeMonad $ checkProgram a
 
-checkProgram :: Program -> TypeMonad ()
+checkProgram :: Program a -> TypeMonad ()
 
-checkProgram (Program list) = do
-  let fnTypes = Map.fromList $ getTypes list
-  local (const fnTypes) (mapM_ checkTopDef list)
+checkProgram (Program _ list) = do
+  let fnTypes = Map.fromList $ getTopTypes list
+  local (const (fnTypes, TCVoid)) (mapM_ checkTopDef list) 
 
 
-getTypes ::  [TopDef] -> [(Ident, Type)]
-getTypes = map getType
+getTopTypes ::  [TopDef a] -> [(Ident, TCType)]
+getTopTypes = map getTopType
 
----uhhhh
-getType :: TopDef -> (Ident, Type)
+getTopType :: TopDef a -> (Ident, TCType)
 
-getType (FnDef t ident arg block) =  (ident, Fun t unpackTypes $ arg)
+getTopType (FnDef _ t ident arg block) =  (ident, TCFun (convertType t) (unpackTypes arg))
 
-unpackTypes :: [Arg] -> [Type]
+unpackTypes :: [Arg a] -> [TCType]
 unpackTypes = map unpackType
-unpackType :: Arg -> Type
-unpackType Arg t i = t
+unpackType :: Arg a -> TCType
+unpackType (Arg _ t i) = convertType t
 
-makePair :: Arg -> (Ident, Type)
-makePair (Arg t i) = (i, t)
-checkTopDef :: TopDef -> TypeMonad ()
+convertType :: Type a -> TCType
+convertType (Latte.Int _) = TCInt
+convertType (Latte.Str _) = TCStr
+convertType (Latte.Bool _) = TCBool
+convertType (Latte.Void _) = TCVoid
 
-checkTopDef (TopDef t ident args block) = do
-  let map = Map.fromList (map makePair args)
-      newReader = (map, t)
-  local (const newReader) $ checkBlock block
+makePair :: Arg a -> (Ident, TCType)
+makePair (Arg _ t i) = (i, convertType t)
 
-getIdent :: Item -> Ident
-getIdent (NoInit i) = i
-getIdent (Init i expr ) = i
+checkTopDef :: TopDef a -> TypeMonad ()
+
+checkTopDef (FnDef _ t ident args block) = do
+  let newVars = Map.fromList (map makePair args)
+  local (first (Map.union newVars))  $ checkBlock block
+
+getIdent :: Item a -> Ident
+getIdent (NoInit _ i) = i
+getIdent (Init _ i expr ) = i
 
 first :: (a -> c) -> (a, b) -> (c, b)
 first f ~(a, b) = (f a, b)
@@ -60,157 +67,151 @@ first f ~(a, b) = (f a, b)
 second :: (b -> c) -> (a, b) -> (a, c)
 second f ~(a, b) = (a, f b)
 
-checkBlock :: Block -> TypeMonad ()
-checkBlock (Block []) = return ()
-checkBlock (Block (stmt@(Decl t item):tail)) = do
-  let map = Map.fromList (zip (map getIdent item) (repeat t))
+checkBlock :: Block a -> TypeMonad ()
+checkBlock (Block _ []) = return ()
+checkBlock (Block loc (stmt@(Decl _ t item):tail)) = do
+  let newVars = Map.fromList (zip (map getIdent item) (repeat (convertType t)))
   checkStmt stmt
-  local (first (Map.union map) ) $ checkBlock (Block tail)
+  local (first (Map.union newVars) ) ( checkBlock (Block loc tail))
 
-checkBlock(Block (head:tail)) = do
+checkBlock(Block loc (head:tail)) = do
   checkStmt head
-  checkBlock (Block tail)
+  checkBlock (Block loc tail)
 
 
-
-
-
-getType :: Ident -> TypeMonad Type
+-- TODO loc
+getType :: Ident -> TypeMonad TCType
 getType i = do
   r <- asks fst
   unless (Map.member i r) $ throwError "undefined XD"
   return (r ! i)
-checkStmt :: Stmt -> TypeMonad()
-checkStmt Empty = return ()
-checkStmt (Bstmt b) = checkBlock b
-checkStmt (Decl t i) = mapM_ (checkItem t) i
-checkStmt (Ass ident expr) = do
+checkStmt :: Stmt a -> TypeMonad()
+checkStmt (Empty _) = return ()
+checkStmt (BStmt _ b) = checkBlock b
+checkStmt (Decl _ t i) = mapM_ (checkItem $ convertType t) i
+checkStmt (Ass loc ident expr) = do
   t <- checkExpr expr
   ti <- getType ident
   unless (t == ti) $ throwError "wrong types XD"
-checkStmt (Incr ident) = do
+checkStmt (Incr loc ident) = do
   t <- getType ident
-  unless (t == Latte.Int) $ throwError "wrong type for increasing XD"
+  unless (t == TCInt) $ throwError "wrong type for increasing XD"
 
-checkStmt (Decr ident) = do
+checkStmt (Decr loc ident) = do
   t <- getType ident
-  unless (t == Latte.Int) $ throwError "wrong type for decreasing XD"
+  unless (t == TCInt) $ throwError "wrong type for decreasing XD"
 
-checkStmt (Ret expr) = do
+checkStmt (Ret loc expr) = do
   t <- checkExpr expr
   tret <- asks snd
   unless (t == tret) $ throwError "wrong type returned"
 
-checkStmt VRet = do
+checkStmt (VRet loc) = do
   t <- asks snd
-  unless (t == Latte.Void) $ throwError "wrong type returned"
+  unless (t == TCVoid) $ throwError "wrong type returned"
 
-checkStmt (Cond expr stmt) = do
+checkStmt (Cond loc expr stmt) = do
   t <- checkExpr expr
-  unless (t == Latte.Bool) $ throwError "wrong type of logica condition"
+  unless (t == TCBool) $ throwError "wrong type of logica condition"
   checkStmt stmt
 
-checkStmt (CondElse expr stmt1 stmt2) = do
+checkStmt (CondElse loc expr stmt1 stmt2) = do
   t <- checkExpr expr
-  unless (t == Latte.Bool) $ throwError "wrong type of logica condition"
-  checkStmt stmt
+  unless (t == TCBool) $ throwError "wrong type of logica condition"
+  checkStmt stmt1
   checkStmt stmt2
 
-checkStmt (While expr stmt) = do
+checkStmt (While loc expr stmt) = do
   t <- checkExpr expr
-  unless (t == Latte.Bool) $ throwError "wrong type of logica condition"
+  unless (t == TCBool) $ throwError "wrong type of logica condition"
   checkStmt stmt
 
-checkStmt (Cond expr stmt) = do
-  t <- checkExpr expr
-  unless (t == Latte.Bool) $ throwError "wrong type of logica condition"
-  checkStmt stmt
-
-checkStmt (SExp expr) =  checkExpr expr
+checkStmt (SExp _ expr) = do checkExpr expr; return ()
 
 
-
-
-
-checkItem :: Type -> Item -> TypeMonad()
-checkItem t (NoInit i ) =  return ()
-checkItem t (Init ident expr) =do
+checkItem :: TCType -> Item a -> TypeMonad()
+checkItem t (NoInit _ i ) =  return ()
+checkItem t (Init loc ident expr) =do
   t1 <- checkExpr expr
-  unles (t == t1) $ throwError "wrong type XD"
+  unless (t == t1) $ throwError "wrong type XD"
 
-isFunctional :: Type -> Bool
-isFunctional (Fun _ _) = True
+isFunctional :: TCType -> Bool
+isFunctional (TCFun _ _) = True
 isFunctional _ = False
 
-checkExpr :: Expr -> TypeMonad Type
-checkExpr (Evar ident) = getType ident
-checkExpr (ELitInt integer) = return Latte.Int
-checkExpr ELitTrue = return Latte.Bool
-checkExpr ELitFalse = return Latte.Bool
-checkExpr EApp ident exprs = do
+checkExpr :: Expr a -> TypeMonad TCType
+checkExpr (EVar _ ident) = getType ident
+checkExpr (ELitInt _ integer) = return TCInt
+checkExpr (ELitTrue _) = return TCBool
+checkExpr (ELitFalse _) = return TCBool
+checkExpr (EApp loc ident exprs) = do
   t <- getType ident
   types <- mapM checkExpr exprs
   unless (isFunctional t) $ throwError "wrong type"
-  let Fun retT argTs = t
-  unless (argTs == types) $throwError "wrong type"
+  let TCFun retT argTs = t
+  unless (argTs == types) $ throwError "wrong type"
   return retT
 
-checkExpr EString string = return Latte.Str
-checkExpr Neg expr = do
+checkExpr (EString _ string) = return TCStr
+checkExpr (Neg loc expr) = do
   t <- checkExpr expr
-  unless (t == Latte.Int) $ throwError "wrong type"
-  return Latte.Int
-checkExpr Not expr = do
+  unless (t == TCInt) $ throwError "wrong type"
+  return TCInt
+checkExpr (Not loc expr) = do
   t <- checkExpr expr
-  unless (t == Latte.Bool ) $ throwError "wrong type"
-  return Latte.Int
+  unless (t == TCBool ) $ throwError "wrong type"
+  return TCBool
 
-checkExpr (EMul exp1 _ exp2) = do
+checkExpr (EMul loc exp1 _ exp2) = do
   t1 <- checkExpr exp1
   t2 <- checkExpr exp2
-  unless (t1 == Latte.Int) $ throwError "wrong type"
-  unless (t2 == Latte.Int) $ throwError "wrong type"
-  return Latte.Int
+  unless (t1 == TCInt) $ throwError "wrong type"
+  unless (t2 == TCInt) $ throwError "wrong type"
+  return TCInt
 
 
-checkExpr (EAdd exp1 Plus exp2) = do
+checkExpr (EAdd loc exp1 (Plus loc2) exp2) = do
   t1 <- checkExpr exp1
   t2 <- checkExpr exp2
-  unless (t1 == Latte.Int || t1 == Latte.Str) $ throwError "wrong type"
-  unless (t2 == Latte.Int || t2 == Latte.Str) $ throwError "wrong type"
+  unless (t1 == TCInt || t1 == TCStr) $ throwError "wrong type"
+  unless (t2 == TCInt || t2 == TCStr) $ throwError "wrong type"
   unless (t1 == t2) $ throwError "wrong type"
   return t1
 
-checkExpr (EAdd exp1 _ exp2) = do
+checkExpr (EAdd loc exp1 _ exp2) = do
   t1 <- checkExpr exp1
   t2 <- checkExpr exp2
-  unless (t1 == Latte.Int) $ throwError "wrong type"
-  unless (t2 == Latte.Int) $ throwError "wrong type"
-  return Latte.Int
+  unless (t1 == TCInt) $ throwError "wrong type"
+  unless (t2 == TCInt) $ throwError "wrong type"
+  return TCInt
 
- checkExpr (ERel exp1 op exp2) = do
+checkExpr (ERel loc exp1 op exp2) = do
    t1 <- checkExpr exp1
    t2 <- checkExpr exp2
-   if op `elem` [LTH, LE, GTH, GE] then do
-     unless (t1 == Latte.Int) $ throwError "wrong type"
-     unless (t2 == Latte.Int) $ throwError "wrong type"
-     return Latte.Bool
+   let isrel = case op of LTH _ -> True
+                          LE _ -> True
+                          GTH _ -> True
+                          GE _ -> True 
+                          _ -> False 
+   if isrel then do
+     unless (t1 == TCInt) $ throwError "wrong type"
+     unless (t2 == TCInt) $ throwError "wrong type"
+   
    else do
      unless (t1 == t2) $ throwError "wrong type"
-     return Latte.Bool
+   return TCBool
 
-
-checkExpr (EAnd exp1 _ exp2) = do
+checkExpr (EAnd loc exp1 exp2) = do
   t1 <- checkExpr exp1
   t2 <- checkExpr exp2
-  unless (t1 == Latte.Bool) $ throwError "wrong type"
-  unless (t2 == Latte.Bool) $ throwError "wrong type"
-  return Latte.Bool
+  unless (t1 == TCBool) $ throwError "wrong type"
+  unless (t2 == TCBool) $ throwError "wrong type"
+  return TCBool
 
-checkExpr (EOr exp1 _ exp2) = do
+checkExpr (EOr loc exp1 exp2) = do
   t1 <- checkExpr exp1
   t2 <- checkExpr exp2
-  unless (t1 == Latte.Bool) $ throwError "wrong type"
-  unless (t2 == Latte.Bool) $ throwError "wrong type"
-  return Latte.Bool
+  unless (t1 == TCBool) $ throwError "wrong type"
+  unless (t2 == TCBool) $ throwError "wrong type"
+  return TCBool
 

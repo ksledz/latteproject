@@ -9,13 +9,14 @@ import qualified Data.Text as T
 import qualified Data.Maybe
 import System.Process
 import System.Exit
+import System.IO
 
 import ErrM
 
 slash :: T.Text
 slash = T.pack("/")
 ico :: T.Text
-ico = T.pack(".ins")
+ico = T.pack(".lat")
 
 basename :: T.Text -> T.Text
 basename f = Data.Maybe.fromJust(T.stripSuffix ico (last $ T.splitOn slash f))
@@ -31,7 +32,10 @@ main = do
   args <- getArgs
   text <- readFile $ head $ args
   case pProgram $ myLexer $ text of
-	Bad s -> die (s ++ "\n parse failed \n")
-	Ok tree -> do 
-		writeFile (outputName $ head $ args) (allToLLVM tree)
-		callProcess "llvm-as" [outputName $ head $ args]
+	Bad s -> die ("ERROR\n" ++ s)
+	Ok tree -> do
+            case checkTypes tree of 
+                Right () -> hPutStrLn stderr "OK"
+                Left s -> die ("ERROR\n" ++ s) 
+		--writeFile (outputName $ head $ args) (allToLLVM tree)
+		--callProcess "llvm-as" [outputName $ head $ args]
