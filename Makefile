@@ -36,4 +36,4 @@ test-llvm: examples/test01.ll examples/test02.ll examples/test03.ll examples/tes
 
 
 dist: 
-	tar -czf ks386105.tar.gz Makefile README src/ lib/ examples/
+	tar -czf ks386105.tar.gz Makefile README src/  examples/

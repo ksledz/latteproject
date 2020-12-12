@@ -1,0 +1,6 @@
+- szczegóły kompilacji i uruchamiania programu:
+program kompiluje się za pomocą polecenia make, które wywołuje generator lekserów alex, generator parserów happy i kompiluje całość za pomocą ghc. kompilator napisany jest w języku haskell z użyciem bnfc. 
+- używane narzędzia i biblioteki
+fork bnfc z obsługą lokalizacji w parserze (https://github.com/ksledz/bnfc), sforkowany od https://github.com/Commelina/bnfc, happy, alex, ghc. makefile nie wywołuje bnfc ponieważ bnfc nie ma na studentsie, więc makefile używa już wygenerowanego przez bnfc kodu.
+- struktura katalogów projektu
+w katalogu src/ znajdują się: Latte.cf, pliki wygenerowane przez bnfc, plik zawierający logikę type checkera (TypeChecker.hs). w katalogu examples/ zawarte są przykłady z treści zadania.
