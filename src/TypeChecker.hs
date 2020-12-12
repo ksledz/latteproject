@@ -62,8 +62,9 @@ makePair (Arg _ t i) = (i, convertType t)
 
 checkTopDef :: TopDef Location -> TypeMonad ()
 
-checkTopDef (FnDef _ t ident args block) = do
+checkTopDef (FnDef loc t ident args block) = do
   let newVars = Map.fromList (map makePair args)
+  unless ((Map.size newVars) == length(args)) $ throwError (loc, "repeating identifiers")
   local ((first (Map.union newVars)).(second $ const $ convertType t))  $ checkBlock block
 
 getIdent :: Item a -> Ident
@@ -80,6 +81,7 @@ checkBlock :: Block Location -> TypeMonad ()
 checkBlock (Block _ []) = return ()
 checkBlock (Block loc (stmt@(Decl _ t item):tail)) = do
   let newVars = Map.fromList (zip (map getIdent item) (repeat (convertType t)))
+  unless ((Map.size newVars) == length(item)) $ throwError (loc, "repeating identifiers")
   checkStmt stmt
   local (first (Map.union newVars) ) ( checkBlock (Block loc tail))
 
@@ -159,7 +161,7 @@ checkExpr (EApp loc ident exprs) = do
   types <- mapM checkExpr exprs
   unless (isFunctional t) $ throwError (loc, "wrong type: not a function")
   let TCFun retT argTs = t
-  unless (argTs == types) $ throwError (loc, "wrong argumeny type")
+  unless (argTs == types) $ throwError (loc, "wrong argument type")
   return retT
 
 checkExpr (EString _ string) = return TCStr
