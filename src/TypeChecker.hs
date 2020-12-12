@@ -24,10 +24,18 @@ checkTypes :: Program Location -> Either String ()
 
 checkTypes a = runTypeMonad $ checkProgram a
 
+builtinTypes :: [(Ident, TCType)]
+builtinTypes = [
+        (Ident "printString", TCFun TCVoid [TCStr]),
+        (Ident "printInt", TCFun TCVoid [TCInt]),
+        (Ident "error", TCFun TCVoid []),
+        (Ident "readInt", TCFun TCInt []),
+        (Ident "readString", TCFun TCStr [])] 
+
 checkProgram :: Program Location -> TypeMonad ()
 
 checkProgram (Program _ list) = do
-  let fnTypes = Map.fromList $ getTopTypes list
+  let fnTypes = Map.fromList $ (getTopTypes list ++ builtinTypes)
   local (const (fnTypes, TCVoid)) (mapM_ checkTopDef list) 
 
 
