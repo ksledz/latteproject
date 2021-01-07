@@ -17,7 +17,7 @@ import qualified AbsLatte as Latte
 
 type Location = Maybe (Int, Int)
 -- lol
-data LLState = LLState (Map Int LLInstruction) (Map Int LLBlock) LLCurrent (Set String) (Map String (LLType, [LLType]))
+data LLState = LLState (Map Int LLInstruction) (Map Int LLBlock) LLCurrent (Set String) (Map String (LLType, [LLType])) (Map String Int)
 type LLInstruction = (Int, LLInsn)
 data LLInsn = 	LLInsnAdd LLVal LLVal | 
 		LLInsnSub LLVal LLVal |
@@ -39,7 +39,7 @@ data LLInsn = 	LLInsnAdd LLVal LLVal |
 		LLInsnPhi LLType |
 		LLInsnArg Integer LLType 
 data LLType = LLInt | LLStr | LLBool | LLVoid deriving Eq
-data LLVal = LLReg Int | LLConstInt Integer | LLConstBool Bool | LLConstStr String deriving Eq
+data LLVal = LLReg Int | LLConstInt Integer | LLConstBool Bool | LLConstStr Int deriving Eq
 -- params are: parent index and depth and end
 data LLBlock = LLBlock Int Int LLEnd 
 type LLJump = (Int, Map Int LLVal)
@@ -67,14 +67,14 @@ emitPhi block (mVars, mPhi1, mPhi2) (s, t, v1, v2) = do
 getVar :: String -> LLMonad (LLVal, LLType)
 getVar a = do
   state <- get 
-  let LLState _ _ (LLCurrentBlock _ m) _ _ = state
+  let LLState _ _ (LLCurrentBlock _ m) _ _ _ = state
   let Just v = Map.lookup a m -- already type checked
   return v
 
 getFunc :: String -> LLMonad (LLType, [LLType])
 getFunc a = do
   state <- get
-  let LLState _ _ _ _ m = state
+  let LLState _ _ _ _ m _ = state
   let Just v = Map.lookup a m
   return v
 
@@ -84,10 +84,10 @@ emitSimpleExpr = emitInsn
 emitInsnToBlock :: Int -> LLInsn -> LLMonad LLVal
 emitInsnToBlock block insn = do
   state <- get
-  let LLState m1 a b c d = state
+  let LLState m1 a b c d e= state
   let index = Map.size m1
   let m = Map.insert index (block,insn) m1
-  put (LLState m a b c d)
+  put (LLState m a b c d e)
   return (LLReg index)
 
 emitInsn :: LLInsn -> LLMonad LLVal
@@ -98,30 +98,30 @@ emitInsn insn = do
 addLocalVar :: String -> LLMonad ()
 addLocalVar v = do
   state <- get
-  let LLState a b c s1 d = state
+  let LLState a b c s1 d e = state
   let s = Set.insert v s1
-  put (LLState a b c s d)
+  put (LLState a b c s d e)
   return ()
 
 getLocalVars :: LLMonad(Set String)
 getLocalVars = do
   state <- get 
-  let LLState _ _ _ s _ = state
+  let LLState _ _ _ s _ _= state
   return s
 
 setLocalVars :: (Set String) -> LLMonad()
 setLocalVars s = do
   state <- get
-  let LLState a b c s1 d = state
-  put (LLState a b c s d)
+  let LLState a b c s1 d e = state
+  put (LLState a b c s d e)
   return ()
 
 setVar :: String -> (LLVal, LLType) -> LLMonad()
 setVar s v = do
   state <- get
-  let LLState a b (LLCurrentBlock i m1) c d = state
+  let LLState a b (LLCurrentBlock i m1) c d e = state
   let m = Map.insert s v m1
-  put (LLState a b (LLCurrentBlock i m) c d)
+  put (LLState a b (LLCurrentBlock i m) c d e)
   return ()
 
 undefineVar :: (Map String (LLVal, LLType)) -> String -> (Map String (LLVal, LLType)) -> (Map String (LLVal, LLType))
@@ -132,14 +132,14 @@ undefineVar startVars var acc = case Map.lookup var startVars of
 getCurrent :: LLMonad LLCurrent
 getCurrent = do
   state <- get
-  let LLState _ _ c _ _ = state
+  let LLState _ _ c _ _ _ = state
   return c
 
 setCurrent :: LLCurrent -> LLMonad ()
 setCurrent c = do
   state <- get
-  let LLState a b _ d e = state
-  put(LLState a b c d e)
+  let LLState a b _ d e f = state
+  put(LLState a b c d e f)
   return ()
 
 
@@ -149,27 +149,27 @@ startBlock parentIndex = do
   let LLBlock _ parentDepth _ = parentBlock
   let newBlock = LLBlock parentIndex (parentDepth+1) LLOpen
   state <- get
-  let LLState a m1 b c d = state
+  let LLState a m1 b c d e = state
   let index = Map.size m1
   let m = Map.insert index newBlock m1
-  put (LLState a m b c d)
+  put (LLState a m b c d e)
   return index
 
 getBlock :: Int -> LLMonad LLBlock
 getBlock index = do
   state <- get 
-  let LLState _ m _ _ _ = state
+  let LLState _ m _ _ _ _ = state
   return (m Map.! index)
 
 endBlock :: LLEnd -> LLMonad ()
-endBlock e = do
+endBlock end = do
   state <- get
-  let LLState a m1 (LLCurrentBlock i _) c d = state
+  let LLState a m1 (LLCurrentBlock i _) c d e = state
   let currentBlock = m1 Map.! i
   let LLBlock parent depth _ = currentBlock
-  let newBlock = LLBlock parent depth e
+  let newBlock = LLBlock parent depth end
   let m = Map.insert i newBlock m1
-  put (LLState a m LLCurrentNone c d)
+  put (LLState a m LLCurrentNone c d e)
   return ()
 
 
@@ -257,7 +257,16 @@ translateExpr (EVar loc ident) = do
 translateExpr (ELitInt _ i) = return (LLConstInt i, LLInt)
 translateExpr (ELitTrue _) = return (LLConstBool True, LLBool)
 translateExpr (ELitFalse _) = return (LLConstBool False, LLBool)
-translateExpr (EString _ string) = return (LLConstStr string, LLStr)
+translateExpr (EString _ string) = do 
+  state <- get
+  let LLState a b c d e m1 = state
+  case Map.lookup string m1 of
+    Nothing -> do
+      let idx = Map.size m1
+      let m = Map.insert string idx m1
+      put (LLState a b c d e m)
+      return (LLConstStr idx, LLStr)
+    Just idx -> return (LLConstStr idx, LLStr)
 translateExpr (Neg _ expr) = do
   (sv, _) <- translateExpr expr
   v <- emitSimpleExpr (LLInsnNeg sv)
