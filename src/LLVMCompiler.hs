@@ -1,8 +1,10 @@
 
-module LLVMCompiler (allToLLVM) where
+module LLVMCompiler where
 
 import Data.Map (Map)
+import Data.Set (Set)
 import qualified Data.Map as Map
+import qualified Data.Set as Set
 import qualified Data.Char as Char
 import Control.Monad (void)
 import Control.Monad.Reader
@@ -12,256 +14,494 @@ import Data.Void
 import AbsLatte
 import qualified AbsLatte as Latte
 
-pre :: String
-pre = "declare void @printInt(i32) ; \n define i32 @main() { \n "
-post :: String
-post = "ret i32 0 \n }"
 
-type Register = String
-data Loc = LocReg Register
-  | LocAddress Register
-  | LLConst Int
-data LLArg = LLArg LLType Ident
-data LLVMRep =
-  LLFunc LLType Ident [LLArg] [LLBlock]
-  | LLReturn (Maybe (LLType, Loc))
-  | LLCall Loc LLType Ident [(LLType, Loc)]
-  | LLInternalConst Register Int String
-  | LLSub Loc Loc Loc
-  | LLSubI1 Loc Loc Loc
-  | LLAdd Loc Loc Loc
-  | LLMul Loc Loc Loc
-  | LLDiv Loc Loc Loc
-  | LLMod Loc Loc Loc
-  | LLLTH Loc Loc Loc
-  | LLLE Loc Loc Loc
-  | LLGTH Loc Loc Loc
-  | LLGE Loc Loc Loc
-  | LLEQU Loc Loc Loc
-  | LLNE Loc Loc Loc
-  | LLAnd Loc Loc Loc
-  | LLOr Loc Loc Loc
-  | LLAloca LLType Loc
-  | LLStore LLType Loc Loc
-data LLType =
-  I8 | I32 | I1 | Void | LLStar LLType
-type LLVMonad a =
-  ReaderT (Map Ident Loc, Map Ident Type) (StateT Int (Writer [LLVMRep])) a
---map ident type żeby wiedzieć czy plus to na inty czy str. wszystkie topdefy i wszystkie zmienne
---update widoczność zmiennych -> B locktoLLVM
-
-typeToLLType :: Type -> LLType
-typeToLLType Int = I32
-typeToLLType Str = LLStar I8
-typeToLLType Bool = I1
-typeToLLType Latte.Void = Void
-typeToLLType (Arr t) = LLStar $ TypeToLLType t
-typeToLLType _ = error "we dont expect such advanced types"
-argToLLArg :: Arg -> LLArg
-argToLLArg (Arg t i) = LLArg (typeToLLType t) i
-
-runLLVMonad :: LLVMonad a -> [LLVMRep]
-runLLVMonad a = execWriter (evalStateT (runReaderT a (Map.empty, Map.empty)) 0)
-
-generateCode :: [LLVMRep] -> String
--- TODO #5 na sam koniec, matchowanie
-
-programToLLVM :: Program -> String
-programToLLVM (Program l) = generateCode (runLLVMonad (mapM_ topDefToLLVM l) )
-
-swapArgs :: Arg -> (Ident, Type)
-swapArgs (Arg t i) = (i, t)
-getIdentLoc :: Arg -> LLVMonad (Ident, Loc)
-getIdentLoc (Arg t i) = do
-  reg <- freshRegister
-  tell [LLAlloca (typeToLLType t), (LocAddress reg)]
-  return (i, LocAddress reg)
-
-topDefToLLVM :: TopDef -> LLVMonad ()
-topDefToLLVM (FnDef t ident args block) = do
-  let tempList2 = map swapArgs args
-  tempList1 <- mapM getIdentLoc args
-  let tempMap1 = fromList tempList1
-      tempMap2 = fromList tempList2
-  local (\x -> (Map.union tempMap1 (fst x), Map.union tempMap2 (snd x))) $
-    censor ((:[]) . LLFunc (typeToLLType t) ident (map argToLLArg args)) $ blockToLLVM block
-
-getArgsList1 :: Type -> [Item] -> LLVMonad([(Ident, Loc)])
-getArgsList1 t [] = []
-getArgsList1 t (NoInit i:tail) = do
-  reg <- freshRegister
-  tell [LLAlloca (typeToLLType t), (LocAddress reg)]
-  generateDefaultConstructor (typeToLLType t) (LocAddress reg)
-  list <- getArgsList1 t tail
-  return ((i, LocAddress reg):list)
+type Location = Maybe (Int, Int)
+-- lol
+data LLState = LLState (Map Int LLInstruction) (Map Int LLBlock) LLCurrent (Set String) (Map String (LLType, [LLType]))
+type LLInstruction = (Int, LLInsn)
+data LLInsn = 	LLInsnAdd LLVal LLVal | 
+		LLInsnSub LLVal LLVal |
+		LLInsnNeg LLVal |
+		LLInsnNot LLVal |
+		LLInsnMul LLVal LLVal |
+		LLInsnDiv LLVal LLVal |
+		LLInsnMod LLVal LLVal |
+		LLInsnAnd LLVal LLVal |
+		LLInsnOr  LLVal LLVal |
+		LLInsnEq  LLVal LLVal |
+		LLInsnNe  LLVal LLVal |
+		LLInsnLt  LLVal LLVal |
+		LLInsnLe  LLVal LLVal |
+		LLInsnGt  LLVal LLVal |
+		LLInsnGe  LLVal LLVal |
+		LLInsnCat LLVal LLVal |
+		LLInsnCall String [(LLVal, LLType)] LLType |
+		LLInsnPhi LLType |
+		LLInsnArg Integer LLType 
+data LLType = LLInt | LLStr | LLBool | LLVoid deriving Eq
+data LLVal = LLReg Int | LLConstInt Integer | LLConstBool Bool | LLConstStr String deriving Eq
+-- params are: parent index and depth and end
+data LLBlock = LLBlock Int Int LLEnd 
+type LLJump = (Int, Map Int LLVal)
+data LLEnd = LLVoidReturn | LLReturn (LLVal, LLType) | LLCond LLVal LLJump LLJump | LLJoin LLJump | LLOpen
+data LLCurrent = LLCurrentBlock Int (Map String (LLVal, LLType)) | LLCurrentNone deriving Eq
+type LLMonad a = State LLState a
 
 
-getArgsList1 t (Init i e:tail) = do
-  reg <- freshRegister
-  tell [LLAlloca (typeToLLType t), (LocAddress reg)]
-  (_, l) <- exprToLLVM e
-  assign l (LocAddress reg) t
-  list <- getArgsList1 t tail
-  return ((i, LocAddress reg):list)
-generateDefaultConstructor :: LLType -> Loc -> LLVMonad ()
+findPhis_ [] m2 = []
+findPhis_ ((k,(v,t)):tail) m2 = 
+  let (v2, _) = (m2 Map.! k) in 
+  if v==v2 then findPhis_ tail m2 else (k, t, v, v2):(findPhis_ tail m2)
 
-generateDefaultConstructor I32 loc = tell [LLStore I32 (LLConst 0) loc]
-generateDefaultConstructor I1 loc = tell [LLStore I1 (LLConst 0) loc]
-generateDefaultConstructor (LLStar I8) loc = do
-  reg <- freshRegister
-  tell [LLCall (LocAddress reg) (LLStar I8) (Ident "malloc") [(I32, LLConst 1), (I32, LLConst 1]]
-  assign loc (LocAddress reg) (LLStar I8)
+findPhis :: (Map String (LLVal, LLType)) -> (Map String (LLVal, LLType)) -> [(String, LLType, LLVal, LLVal)]
+findPhis m1 m2 = findPhis_ (Map.toList m1) m2
 
-getArgsList2 :: Type -> [Item] -> [(Ident, Type)]
-getArgsList2 t [] = []
-getArgsList2 t (NoInit i:tail) = [(i, t):(getArgsList2 t tail)]
-getArgsList2 t (Init i _:tail) = [(i, t):(getArgsList2 t tail)]
-blockToLLVM :: Block -> LLVMonad ()
-blockToLLVM (Block (Decl t items):tail) = do
-  let tempList2 = getArgsList2 t items
-  tempList1 <- getArgsList1 t items
-  let tempMap1 = fromList tempList1
-      tempMap2 = fromList tempList2
-  local (\x -> (Map.union tempMap1 (fst x), Map.union tempMap2 (snd x))) $ blockToLLVM block
+-- 
+emitPhi :: Int -> (Map String (LLVal, LLType), Map Int LLVal, Map Int LLVal) -> (String, LLType, LLVal, LLVal) -> LLMonad(Map String (LLVal, LLType), Map Int LLVal, Map Int LLVal)
 
-blockToLLVM (Block (h:t)) = do
-  stmtToLLVM h
-  blockToLLVM (Block t)
+emitPhi block (mVars, mPhi1, mPhi2) (s, t, v1, v2) = do
+  vp <- emitInsnToBlock block (LLInsnPhi t)
+  let LLReg phi = vp
+  return (Map.insert s (vp, t) mVars, Map.insert phi v1 mPhi1, Map.insert phi v2 mPhi2)
 
-blockToLLVM (Block []) = return ()
-stmtToLLVM :: Stmt -> LLVMonad ()
-stmtToLLVM Empty = return ()
-stmtToLLVM VRet = tell [LLReturn Nothing]
-stmtToLLVM (Ret e) = do
-  loc <- exprToLLVM e
-  tell [LLReturn (Just loc)]
-stmtToLLVM (Bstmt b) = blockToLLVM b
-stmtToLLVM (Ass i e) = do
-  (map1, map2) <- ask
-  let l = map1 ! i
-      t = map2 ! i
-  (_, exprl) <- exprToLLVM e
-  assign l exprl t
+getVar :: String -> LLMonad (LLVal, LLType)
+getVar a = do
+  state <- get 
+  let LLState _ _ (LLCurrentBlock _ m) _ _ = state
+  let Just v = Map.lookup a m -- already type checked
+  return v
 
+getFunc :: String -> LLMonad (LLType, [LLType])
+getFunc a = do
+  state <- get
+  let LLState _ _ _ _ m = state
+  let Just v = Map.lookup a m
+  return v
 
-stmtToLLVM Cond expr stmt --TODO #4 generacja labelów i blocków
-stmtToLLVM CondElse expr stmt --TODO generacja labelów i blocków
-stmtToLLVM While expr stmt --TODO generacja labelów i blocków
-stmtToLLVM Incr i = return () -- TODO ???
-stmtToLLVM Decr i = return () -- TODO ???
-stmtToLLVM expr = exprToLLVM expr
+emitSimpleExpr :: LLInsn -> LLMonad LLVal
+emitSimpleExpr = emitInsn
 
-exprToLLVM :: Expr -> LLVMonad (LLType, Loc)
-exprToLLVM (EVar i) = getLocType i
-exprToLLVM (ELitInt i) = return (I32, LLConst i)
-exprToLLVM ELitTrue = return (I1, LLConst 1)
-exprToLLVM ELitFalse = return (I1, LLConst 0)
-exprToLLVM (EApp i exprs) = do
-  m <- mapM exprToLLVM exprs
-  reg <- freshRegister
-  t <- getType i
-  tell [LLCall (LocReg reg) t i m]
-  return (t, LocReg reg)
+emitInsnToBlock :: Int -> LLInsn -> LLMonad LLVal
+emitInsnToBlock block insn = do
+  state <- get
+  let LLState m1 a b c d = state
+  let index = Map.size m1
+  let m = Map.insert index (block,insn) m1
+  put (LLState m a b c d)
+  return (LLReg index)
 
-exprToLLVM (EString s) = do
-  reg <- freshRegister
-  let i = length s
-  tell [LLInternalConst reg i s]
-  return (LLStar I8, LocAddress reg)
+emitInsn :: LLInsn -> LLMonad LLVal
+emitInsn insn = do
+  LLCurrentBlock block _ <- getCurrent
+  emitInsnToBlock block insn
 
+addLocalVar :: String -> LLMonad ()
+addLocalVar v = do
+  state <- get
+  let LLState a b c s1 d = state
+  let s = Set.insert v s1
+  put (LLState a b c s d)
+  return ()
 
-exprToLLVM EArr t expr = do
-  reg  <- freshRegister
-  (t1, l) <- exprToLLVm expr
-  tell [LLCall (LocAddress reg) (LLStar (typeToLLType t)) (Ident "malloc") [(t1, l), (I32, LLConst (width t)]]
-  return (LLStar (typeToLLType t), (LocAddress reg))
+getLocalVars :: LLMonad(Set String)
+getLocalVars = do
+  state <- get 
+  let LLState _ _ _ s _ = state
+  return s
 
-exprToLLVM Neg expr = do
-  reg <- freshRegister
-  (t, l) <- exprToLLVM expr
-  tell [LLSub (LocReg reg) (LLConst 0) l]
-  return (I32, (LocReg reg))
+setLocalVars :: (Set String) -> LLMonad()
+setLocalVars s = do
+  state <- get
+  let LLState a b c s1 d = state
+  put (LLState a b c s d)
+  return ()
 
-exprToLLVM Not expr = do
-  reg <- freshRegister
-  (t, l) <- exprToLLVM expr
-  tell [LLSubI1 (LocReg reg) (LLConst 1) l]
-  return (I1, (LocReg reg))
+setVar :: String -> (LLVal, LLType) -> LLMonad()
+setVar s v = do
+  state <- get
+  let LLState a b (LLCurrentBlock i m1) c d = state
+  let m = Map.insert s v m1
+  put (LLState a b (LLCurrentBlock i m) c d)
+  return ()
 
-exprToLLVM (EMul expr1 op expr2) = do
-  reg <- freshRegister
-  (t1, l1) <- exprToLLVM expr1
-  (t2, l2) <- exprToLLVM expr2
-  tell [mulOpToFn op (LocReg reg) l1 l2]
-  return (I32, (LocReg reg))
+undefineVar :: (Map String (LLVal, LLType)) -> String -> (Map String (LLVal, LLType)) -> (Map String (LLVal, LLType))
+undefineVar startVars var acc = case Map.lookup var startVars of 
+  Nothing -> Map.delete var acc
+  Just val -> Map.insert var val acc
 
-exprToLLVM (EAdd expr1 op expr2) = do
-  reg <- freshRegister
-  (t1, l1) <- exprToLLVM expr1
-  (t2, l2) <- exprToLLVM expr2
-  tell [addOpToFn op (LocReg reg) l1 l2]
-  return (I32, (LocReg reg))
+getCurrent :: LLMonad LLCurrent
+getCurrent = do
+  state <- get
+  let LLState _ _ c _ _ = state
+  return c
 
-exprToLLVM (ERel expr1 op expr2) = do
-  reg <- freshRegister
-  (t1, l1) <- exprToLLVM expr1
-  (t2, l2) <- exprToLLVM expr2
-  tell [relOpToFn op (LocReg reg) l1 l2 ]
-  return (I1, (LocReg reg))
+setCurrent :: LLCurrent -> LLMonad ()
+setCurrent c = do
+  state <- get
+  let LLState a b _ d e = state
+  put(LLState a b c d e)
+  return ()
 
 
-exprToLLVM (EAnd expr1 expr2) = do
-  reg <- freshRegister
-  (t1, l1) <- exprToLLVM expr1
-  (t2, l2) <- exprToLLVM expr2
-  tell [LLAnd (LocReg reg) l1 l2]
-  return (I1, (LocReg reg))
-exprToLLVM (EOr expr1 expr2) = do
-  reg <- freshRegister
-  (t1, l1) <- exprToLLVM expr1
-  (t2, l2) <- exprToLLVM expr2
-  tell [LLOr (LocReg reg) l1 l2]
-  return (I1, (LocReg reg))
+startBlock :: Int -> LLMonad Int
+startBlock parentIndex = do
+  parentBlock <- getBlock parentIndex
+  let LLBlock _ parentDepth _ = parentBlock
+  let newBlock = LLBlock parentIndex (parentDepth+1) LLOpen
+  state <- get
+  let LLState a m1 b c d = state
+  let index = Map.size m1
+  let m = Map.insert index newBlock m1
+  put (LLState a m b c d)
+  return index
+
+getBlock :: Int -> LLMonad LLBlock
+getBlock index = do
+  state <- get 
+  let LLState _ m _ _ _ = state
+  return (m Map.! index)
+
+endBlock :: LLEnd -> LLMonad ()
+endBlock e = do
+  state <- get
+  let LLState a m1 (LLCurrentBlock i _) c d = state
+  let currentBlock = m1 Map.! i
+  let LLBlock parent depth _ = currentBlock
+  let newBlock = LLBlock parent depth e
+  let m = Map.insert i newBlock m1
+  put (LLState a m LLCurrentNone c d)
+  return ()
 
 
-mulOpToFn :: MulOp -> Loc -> Loc -> Loc -> LLVMRep
-opToFn Times = LLMul
-opToFn Div = LLDiv
-opToFn Mod = LLMod
-AddOpToFn :: AddOp -> Loc -> Loc -> Loc -> LLVMRep
-opToFn Plus = LLAdd
-opToFn Minus = LLSub
-RelOpToFn :: RelOp -> Loc -> Loc -> Loc -> LLVMRep
-opToFn LTH = LLLTH
-opToFn LE = LLLE
-opToFn GTH = LLGTH
-opToFn GE = LLGE
-opToFn EQU = LLEQU
-opToFn NE = LLNE
+makePhi :: (Map String (LLVal, LLType)) -> (Map String (LLVal, LLType)) -> String -> (Int, LLVal)
 
-getLocType :: Ident -> LLVMonad(LLType, Loc)
-getLocType i = do
-  (map1, map2) <- ask
-  let l = map1 ! i
-      t = map2 ! i
-  return (t, l)
-getType :: Ident -> LLVMonad(LLType)
-getType i = do
-  map2 <- asks snd
-  return (map2 ! i)
+makePhi phiVars srcVars phi = 
+  let (LLReg idx, _) = phiVars Map.! phi in (idx, fst (srcVars Map.! phi))
 
+makePhis :: (Map String (LLVal, LLType)) -> (Set String) -> (Map String (LLVal, LLType)) -> (Map Int LLVal)
+makePhis phiVars phis srcVars = Map.fromList(map (makePhi phiVars srcVars) (Set.toList phis))
 
-freshRegister :: LLVMonad Register
-freshRegister = do
-  oldRegister <- get
-  put $ oldRegister + 1
-  return $ "%" ++ show (oldRegister + 1)
+emitLoopPhi :: Int -> (Map String (LLVal, LLType)) -> String -> LLMonad(Map String (LLVal, LLType))
+emitLoopPhi block vars s = do
+  let typ = snd $ vars Map.! s
+  val <- emitInsnToBlock block (LLInsnPhi typ)
+  return (Map.insert s (val, typ) vars)
 
-assign :: Loc -> Loc -> LLType -> LLVMonad ()
-assign = undefined -- TODO #koniec
+translateWhile :: (Expr Location) -> (Stmt Location) -> (Set String) -> LLMonad()
+translateWhile (ELitFalse _) _ _ = return()
+translateWhile (ELitTrue loc)  stmt phiVars = do 
+  state <- get  
+  cur <- getCurrent
+  let LLCurrentBlock curBlock curVars = cur
+  loopBlock <- startBlock curBlock
+  loopVars <- foldM (emitLoopPhi loopBlock) curVars phiVars
+  let curPhis = makePhis loopVars phiVars curVars
+  endBlock $ LLJoin (loopBlock, curPhis)
+  setCurrent $ LLCurrentBlock loopBlock loopVars
+  translateStmt stmt
+  after <- getCurrent 
+  case after of
+    LLCurrentNone -> return () 
+    LLCurrentBlock afterBlock afterVars -> do
+      let actualPhiVars = Set.fromList $ map (\(a, _, _, _) -> a) (findPhis afterVars curVars)
+      if Set.isSubsetOf actualPhiVars phiVars then do
+        let afterPhis = makePhis loopVars phiVars afterVars
+        endBlock $ LLJoin (loopBlock, afterPhis)
+      else do
+        put state
+        translateWhile (ELitTrue loc) stmt (Set.union phiVars actualPhiVars)
 
-width ::LLType -> Int
-width I8 = 1
-width I32 = 4
-width I1 = 1
-width LLStar t = 8 -- ?
+translateWhile expr stmt phiVars = do
+  state <- get  
+  cur <- getCurrent
+  let LLCurrentBlock curBlock curVars = cur
+  loopBlock <- startBlock curBlock
+  loopVars <- foldM (emitLoopPhi loopBlock) curVars phiVars
+  let curPhis = makePhis loopVars phiVars curVars
+  endBlock $ LLJoin (loopBlock, curPhis)
+  setCurrent $ LLCurrentBlock loopBlock loopVars
+  (cv, _)<-translateExpr expr
+  LLCurrentBlock postCondBlock postCondVars <- getCurrent
+  okBlock <- startBlock postCondBlock
+  exitBlock <- startBlock postCondBlock
+  endBlock (LLCond cv (okBlock, Map.empty) (exitBlock, Map.empty))
+  setCurrent $ LLCurrentBlock okBlock postCondVars
+  translateStmt stmt
+  after <- getCurrent 
+  case after of
+    LLCurrentNone -> setCurrent $ LLCurrentBlock exitBlock postCondVars
+    LLCurrentBlock afterBlock afterVars -> do
+      let actualPhiVars = Set.fromList $ map (\(a, _, _, _) -> a) (findPhis afterVars curVars)
+      if Set.isSubsetOf actualPhiVars phiVars then do
+        let afterPhis = makePhis loopVars phiVars afterVars
+        endBlock $ LLJoin (loopBlock, afterPhis)
+        setCurrent $ LLCurrentBlock exitBlock postCondVars
+      else do
+        put state
+        translateWhile expr stmt (Set.union phiVars actualPhiVars)
+
+translateBlockStmt :: Stmt Location -> LLMonad()
+translateBlockStmt s = do
+  cur <- getCurrent
+  if cur == LLCurrentNone then return () else translateStmt s
+
+translateStmt :: Stmt Location -> LLMonad ()
+translateBlock :: Block Location -> LLMonad ()
+translateExpr :: Expr Location -> LLMonad (LLVal, LLType)
+translateItem :: Item Location -> LLMonad()
+
+translateExpr (EVar loc ident) = do
+  let Ident s = ident 
+  getVar s
+
+translateExpr (ELitInt _ i) = return (LLConstInt i, LLInt)
+translateExpr (ELitTrue _) = return (LLConstBool True, LLBool)
+translateExpr (ELitFalse _) = return (LLConstBool False, LLBool)
+translateExpr (EString _ string) = return (LLConstStr string, LLStr)
+translateExpr (Neg _ expr) = do
+  (sv, _) <- translateExpr expr
+  v <- emitSimpleExpr (LLInsnNeg sv)
+  return (v, LLInt)
+
+translateExpr (Not _ expr) = do
+  (sv, _) <- translateExpr expr
+  v <- emitSimpleExpr (LLInsnNot sv)
+  return (v, LLBool)
+
+translateExpr (EMul _ e1 (Times _) e2) = do
+  (sv1, _) <- translateExpr e1
+  (sv2, _) <- translateExpr e2
+  v <- emitSimpleExpr (LLInsnMul sv1 sv2)
+  return (v, LLInt)
+
+translateExpr (EMul _ e1 (Div _)  e2) = do
+  (sv1, _) <- translateExpr e1
+  (sv2, _) <- translateExpr e2
+  v <- emitSimpleExpr (LLInsnDiv sv1 sv2)
+  return (v, LLInt)
+
+translateExpr (EMul _ e1 (Mod _) e2) = do
+  (sv1, _) <- translateExpr e1
+  (sv2, _) <- translateExpr e2
+  v <- emitSimpleExpr (LLInsnMod sv1 sv2)
+  return (v, LLInt)
+
+translateExpr (EAdd _ e1 (Plus _) e2) = do
+  (sv1, st1) <- translateExpr e1
+  (sv2, _) <- translateExpr e2
+  v <- emitSimpleExpr (if st1 == LLInt then (LLInsnAdd sv1 sv2) else (LLInsnCat sv1 sv2))
+  return (v, st1)
+
+translateExpr (EAdd _ e1 (Minus _) e2) = do
+  (sv1, _) <- translateExpr e1
+  (sv2, _) <- translateExpr e2
+  v <- emitSimpleExpr (LLInsnSub sv1 sv2)
+  return (v, LLInt)
+
+translateExpr (ERel _ e1 (LTH _) e2) = do
+  (sv1, _) <- translateExpr e1
+  (sv2, _) <- translateExpr e2
+  v <- emitSimpleExpr (LLInsnLt sv1 sv2)
+  return (v, LLBool)
+
+translateExpr (ERel _ e1 (LE _) e2) = do
+  (sv1, _) <- translateExpr e1
+  (sv2, _) <- translateExpr e2
+  v <- emitSimpleExpr (LLInsnLe sv1 sv2)
+  return (v, LLBool)
+
+translateExpr (ERel _ e1 (GTH _) e2) = do
+  (sv1, _) <- translateExpr e1
+  (sv2, _) <- translateExpr e2
+  v <- emitSimpleExpr (LLInsnGt sv1 sv2)
+  return (v, LLBool)
+
+translateExpr (ERel _ e1 (GE _) e2) = do
+  (sv1, _) <- translateExpr e1
+  (sv2, _) <- translateExpr e2
+  v <- emitSimpleExpr (LLInsnGe sv1 sv2)
+  return (v, LLBool)
+
+translateExpr (ERel _ e1 (EQU _) e2) = do
+  (sv1, _) <- translateExpr e1
+  (sv2, _) <- translateExpr e2
+  v <- emitSimpleExpr (LLInsnEq sv1 sv2)
+  return (v, LLBool)
+
+translateExpr (ERel _ e1 (NE _) e2) = do
+  (sv1, _) <- translateExpr e1
+  (sv2, _) <- translateExpr e2
+  v <- emitSimpleExpr (LLInsnNe sv1 sv2)
+  return (v, LLBool)
+
+translateExpr (EAnd _ e1 e2) = do
+  (sv1, _) <- translateExpr e1
+  -- what block r we in
+  cur <- getCurrent
+  let LLCurrentBlock curBlock curVars = cur
+
+  joinBlock <- startBlock curBlock
+  fv <- emitInsnToBlock joinBlock (LLInsnPhi LLBool)
+  let LLReg phi = fv
+
+  condBlock <- startBlock curBlock
+  setCurrent(LLCurrentBlock condBlock curVars)  
+  (sv2, _) <- translateExpr e2
+  endBlock (LLJoin (joinBlock, (Map.singleton phi sv2)))
+
+  setCurrent cur
+  endBlock (LLCond sv1 (condBlock, Map.empty) (joinBlock, Map.singleton phi sv1))
+
+  setCurrent(LLCurrentBlock joinBlock curVars)  
+  return (fv, LLBool)
+
+translateExpr (EOr _ e1 e2) = do
+  (sv1, _) <- translateExpr e1
+  -- what block r we in
+  cur <- getCurrent
+  let LLCurrentBlock curBlock curVars = cur
+
+  joinBlock <- startBlock curBlock
+  setCurrent(LLCurrentBlock joinBlock curVars)  
+  fv <- emitInsn (LLInsnPhi LLBool)
+  let LLReg phi = fv
+
+  condBlock <- startBlock curBlock
+  setCurrent(LLCurrentBlock condBlock curVars)  
+  (sv2, _) <- translateExpr e2
+  endBlock (LLJoin (joinBlock, (Map.singleton phi sv2)))
+
+  setCurrent cur
+  endBlock (LLCond sv1 (joinBlock, Map.singleton phi sv1) (condBlock, Map.empty))
+
+  setCurrent(LLCurrentBlock joinBlock curVars)  
+  return (fv, LLBool)
+
+translateExpr (EApp _ i exprs) = do
+  let Ident s = i
+  args <- mapM translateExpr exprs 
+  (rt, _ ) <- getFunc s 
+  v <- emitInsn (LLInsnCall s args rt)
+  return (v, rt)
+
+translateStmt (Empty _) = return ()
+translateStmt (BStmt _ b) = translateBlock b
+translateStmt (Decl _ t i) = do
+  mapM_ translateItem i
+
+translateStmt (Ass _ ident expr) = do
+  let Ident s = ident 
+  val <- translateExpr expr 
+  setVar s val
+
+translateStmt (Incr _ ident) = do
+  let Ident s = ident
+  (val, typ) <- getVar s 
+  nval <- emitSimpleExpr(LLInsnAdd val (LLConstInt 1))
+  setVar s (nval, LLInt)
+
+translateStmt (Decr _ ident) = do
+  let Ident s = ident
+  (val, typ) <- getVar s 
+  nval <- emitSimpleExpr(LLInsnAdd val (LLConstInt (-1)))
+  setVar s (nval, LLInt)
+
+translateStmt (SExp _ expr) = do 
+  translateExpr expr
+  return ()
+
+-- TODO while
+translateStmt (Cond _ expr stmt) = do
+  (sv, _) <- translateExpr expr
+  case sv of
+    LLConstBool True -> translateStmt stmt
+    LLConstBool False -> return ()
+    _ -> do
+      cur <- getCurrent
+      let LLCurrentBlock curBlock curVars = cur
+      condBlock <- startBlock curBlock
+      setCurrent (LLCurrentBlock condBlock curVars)
+      translateStmt stmt
+      cond <- getCurrent
+      joinBlock <- startBlock curBlock
+      case cond of 
+        LLCurrentNone -> do
+          setCurrent cur
+          endBlock (LLCond sv (condBlock, Map.empty) (joinBlock, Map.empty))
+          setCurrent(LLCurrentBlock joinBlock curVars)
+        LLCurrentBlock finalCondBlock condVars -> do
+          let phis = findPhis condVars curVars
+          (joinVars, condPhis, curPhis) <- foldM (emitPhi joinBlock) (curVars, Map.empty, Map.empty) phis
+          
+          endBlock (LLJoin (joinBlock, condPhis))
+          setCurrent cur
+          endBlock (LLCond sv (condBlock, Map.empty) (joinBlock, curPhis))
+          setCurrent(LLCurrentBlock joinBlock joinVars)
+
+translateStmt (CondElse _ expr stmt1 stmt2) = do
+  (sv, _) <- translateExpr expr
+  case sv of
+    LLConstBool True -> translateStmt stmt1
+    LLConstBool False -> translateStmt stmt2
+    _ -> do
+      cur <- getCurrent
+      let LLCurrentBlock curBlock curVars = cur
+      condBlock1 <- startBlock curBlock
+      setCurrent (LLCurrentBlock condBlock1 curVars)
+      translateStmt stmt1
+      cond1 <- getCurrent
+      condBlock2 <- startBlock curBlock
+      setCurrent (LLCurrentBlock condBlock2 curVars)
+      translateStmt stmt2
+      cond2 <- getCurrent
+      setCurrent cur
+      endBlock (LLCond sv (condBlock1, Map.empty) (condBlock2, Map.empty))
+      case (cond1, cond2) of 
+        (LLCurrentNone, LLCurrentNone) -> return ()
+        (LLCurrentNone, LLCurrentBlock finalCond2Block condVars2) -> setCurrent cond2
+        (LLCurrentBlock finalCond1Block condVars1, LLCurrentNone) -> setCurrent cond1
+        (LLCurrentBlock finalCond1Block condVars1, LLCurrentBlock finalCond2Block condVars2) -> do
+       
+          joinBlock <- startBlock curBlock
+          let phis = findPhis condVars1 condVars2
+          (joinVars, condPhis1, condPhis2) <- foldM (emitPhi joinBlock) (curVars, Map.empty, Map.empty) phis
+          setCurrent cond1
+          endBlock (LLJoin (joinBlock, condPhis1))
+          setCurrent cond2
+          endBlock (LLJoin (joinBlock, condPhis2))
+          setCurrent(LLCurrentBlock joinBlock joinVars)
+translateStmt (While _ expr stmt) = translateWhile expr stmt Set.empty
+
+translateStmt (Ret _ expr) = do
+  v <- translateExpr expr
+  endBlock (LLReturn v)
+
+translateStmt (VRet _) = do
+  endBlock (LLVoidReturn)
+
+translateItem (NoInit _ ident) = do
+  let Ident s = ident 
+  addLocalVar s
+
+translateItem (Init _ ident expr) = do
+  let Ident s = ident
+  val <- translateExpr expr
+  addLocalVar s 
+  setVar s val
+
+-- TODO
+translateBlock (Block _ stmts) = do
+  cur <- getCurrent 
+  let LLCurrentBlock _ startVars = cur
+  startLocalVars <- getLocalVars
+  setLocalVars Set.empty
+  mapM_ translateBlockStmt stmts
+  after <- getCurrent
+  endLocalVars <- getLocalVars
+  setLocalVars startLocalVars
+  case after of
+    LLCurrentNone -> return ()
+    LLCurrentBlock endBlock endVars -> do
+      let finalVars = Set.foldr (undefineVar startVars) endVars endLocalVars
+      setCurrent $ LLCurrentBlock endBlock finalVars
+

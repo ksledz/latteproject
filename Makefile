@@ -1,5 +1,5 @@
 
-all: latc
+all: latc latc_llvm
 	
 TestLatte: src/ParLatte.hs src/LexLatte.hs src/TestLatte.hs
 	ghc -isrc --make src/TestLatte.hs -o TestLatte
@@ -7,7 +7,8 @@ TestLatte: src/ParLatte.hs src/LexLatte.hs src/TestLatte.hs
 latc: src/ParLatte.hs src/LexLatte.hs src/Main.hs src/TypeChecker.hs
 	ghc -isrc --make src/Main.hs -o latc
 	
-
+latc_llvm: src/ParLatte.hs src/LexLatte.hs src/TypeChecker.hs src/LLVMCompiler.hs
+	ghc -isrc --make src/LLVMCompiler.hs -o latc_llvm
 
 src/LexLatte.hs: src/LexLatte.x
 	alex -g $<
