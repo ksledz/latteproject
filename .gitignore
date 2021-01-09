@@ -8,4 +8,5 @@ latc
 LexLatte.hs
 ParLatte.hs
 *.bak
+*.swp
 ks386105.tar.gz

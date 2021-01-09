@@ -22,9 +22,8 @@ int readInt() {
 }
 
 char *readString() {
-	char *res = 0;
-	size_t n = 0;
-	getline(&res, &n, stdin);
+	char *res;
+	scanf("%ms", &res);
 	return res;
 }
 
