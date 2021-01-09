@@ -1,8 +1,16 @@
 
-module LLVMCompiler where
-
+module Main where
+import System.Environment(getArgs)
+import Text.Printf
 import Data.Map (Map)
 import Data.Set (Set)
+import Data.List 
+import Data.Word (Word8)
+import Data.ByteString (ByteString)
+import Data.Text.Encoding (encodeUtf8)
+import qualified Data.Text as T
+import qualified Data.ByteString as ByteString
+import qualified Data.Maybe
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Data.Char as Char
@@ -10,14 +18,22 @@ import Control.Monad (void)
 import Control.Monad.Reader
 import Control.Monad.State
 import Data.Void
+import System.Process
+import System.Exit
+import System.IO
 
 import AbsLatte
+import LexLatte
+import ParLatte
+import TypeChecker
 import qualified AbsLatte as Latte
 
+import ErrM
 
 type Location = Maybe (Int, Int)
 -- lol
-data LLState = LLState (Map Int LLInstruction) (Map Int LLBlock) LLCurrent (Set String) (Map String (LLType, [LLType])) (Map String Int)
+data LLState = LLState (Map Int LLInstruction) (Map Int LLBlock) LLCurrent (Set String) (Map String (LLType, [LLType])) LLStringMap
+type LLStringMap = (Map String (Int, Int, ByteString))
 type LLInstruction = (Int, LLInsn)
 data LLInsn = 	LLInsnAdd LLVal LLVal | 
 		LLInsnSub LLVal LLVal |
@@ -26,8 +42,6 @@ data LLInsn = 	LLInsnAdd LLVal LLVal |
 		LLInsnMul LLVal LLVal |
 		LLInsnDiv LLVal LLVal |
 		LLInsnMod LLVal LLVal |
-		LLInsnAnd LLVal LLVal |
-		LLInsnOr  LLVal LLVal |
 		LLInsnEq  LLVal LLVal |
 		LLInsnNe  LLVal LLVal |
 		LLInsnLt  LLVal LLVal |
@@ -36,16 +50,35 @@ data LLInsn = 	LLInsnAdd LLVal LLVal |
 		LLInsnGe  LLVal LLVal |
 		LLInsnCat LLVal LLVal |
 		LLInsnCall String [(LLVal, LLType)] LLType |
-		LLInsnPhi LLType |
-		LLInsnArg Integer LLType 
-data LLType = LLInt | LLStr | LLBool | LLVoid deriving Eq
-data LLVal = LLReg Int | LLConstInt Integer | LLConstBool Bool | LLConstStr Int deriving Eq
+		LLInsnPhi LLType 
+data LLType = LLInt | LLStr | LLBool | LLVoid deriving (Eq, Show)
+data LLVal = LLReg Int | LLConstInt Integer | LLConstBool Bool | LLConstStr Int Int | LLArg Int deriving Eq
 -- params are: parent index and depth and end
 data LLBlock = LLBlock Int Int LLEnd 
 type LLJump = (Int, Map Int LLVal)
 data LLEnd = LLVoidReturn | LLReturn (LLVal, LLType) | LLCond LLVal LLJump LLJump | LLJoin LLJump | LLOpen
 data LLCurrent = LLCurrentBlock Int (Map String (LLVal, LLType)) | LLCurrentNone deriving Eq
 type LLMonad a = State LLState a
+
+data TopState = TopState (Map String (LLType, [LLType])) LLStringMap
+type TopMonad a = State TopState a
+
+translateProgram :: Program Location -> TopMonad String
+translateTopDef :: TopDef Location-> TopMonad String
+
+unescape_tail :: String -> String
+unescape_tail "\"" = ""
+unescape_tail ('\\':'\\':t) = '\\':(unescape_tail t)
+unescape_tail ('\\':'"':t) = '\"':(unescape_tail t)
+unescape_tail ('\\':'t':t) = '\t':(unescape_tail t)
+unescape_tail ('\\':'r':t) = '\r':(unescape_tail t)
+unescape_tail ('\\':'n':t) = '\n':(unescape_tail t)
+unescape_tail ('\\':'f':t) = '\f':(unescape_tail t)
+unescape_tail ('\\':_:t) = undefined
+unescape_tail (h:t) = h:(unescape_tail t)
+
+unescape :: String -> String
+unescape ('\"':t) = unescape_tail t
 
 
 findPhis_ [] m2 = []
@@ -187,6 +220,20 @@ emitLoopPhi block vars s = do
   val <- emitInsnToBlock block (LLInsnPhi typ)
   return (Map.insert s (val, typ) vars)
 
+emitString :: String -> LLMonad LLVal
+emitString string = do
+  state <- get
+  let LLState a b c d e m1 = state
+  case Map.lookup string m1 of
+    Nothing -> do
+      let idx = Map.size m1
+      let bs = encodeUtf8 $ T.pack string
+      let l = ByteString.length bs + 1
+      let m = Map.insert string (idx, l, bs) m1
+      put (LLState a b c d e m)
+      return (LLConstStr idx l)
+    Just (idx, l, _) -> return (LLConstStr idx l)
+
 translateWhile :: (Expr Location) -> (Stmt Location) -> (Set String) -> LLMonad()
 translateWhile (ELitFalse _) _ _ = return()
 translateWhile (ELitTrue loc)  stmt phiVars = do 
@@ -248,7 +295,7 @@ translateBlockStmt s = do
 translateStmt :: Stmt Location -> LLMonad ()
 translateBlock :: Block Location -> LLMonad ()
 translateExpr :: Expr Location -> LLMonad (LLVal, LLType)
-translateItem :: Item Location -> LLMonad()
+translateItem :: LLType -> Item Location -> LLMonad()
 
 translateExpr (EVar loc ident) = do
   let Ident s = ident 
@@ -258,15 +305,9 @@ translateExpr (ELitInt _ i) = return (LLConstInt i, LLInt)
 translateExpr (ELitTrue _) = return (LLConstBool True, LLBool)
 translateExpr (ELitFalse _) = return (LLConstBool False, LLBool)
 translateExpr (EString _ string) = do 
-  state <- get
-  let LLState a b c d e m1 = state
-  case Map.lookup string m1 of
-    Nothing -> do
-      let idx = Map.size m1
-      let m = Map.insert string idx m1
-      put (LLState a b c d e m)
-      return (LLConstStr idx, LLStr)
-    Just idx -> return (LLConstStr idx, LLStr)
+  val <- emitString (unescape string)
+  return (val, LLStr)
+
 translateExpr (Neg _ expr) = do
   (sv, _) <- translateExpr expr
   v <- emitSimpleExpr (LLInsnNeg sv)
@@ -396,7 +437,7 @@ translateExpr (EApp _ i exprs) = do
 translateStmt (Empty _) = return ()
 translateStmt (BStmt _ b) = translateBlock b
 translateStmt (Decl _ t i) = do
-  mapM_ translateItem i
+  mapM_ (translateItem $ convertType t) i
 
 translateStmt (Ass _ ident expr) = do
   let Ident s = ident 
@@ -419,7 +460,6 @@ translateStmt (SExp _ expr) = do
   translateExpr expr
   return ()
 
--- TODO while
 translateStmt (Cond _ expr stmt) = do
   (sv, _) <- translateExpr expr
   case sv of
@@ -488,17 +528,22 @@ translateStmt (Ret _ expr) = do
 translateStmt (VRet _) = do
   endBlock (LLVoidReturn)
 
-translateItem (NoInit _ ident) = do
+translateItem t (NoInit _ ident) = do
   let Ident s = ident 
   addLocalVar s
+  case t of
+    LLInt -> setVar s (LLConstInt 0, LLInt)
+    LLBool -> setVar s (LLConstBool False, LLBool)
+    LLStr -> do
+      val <- emitString "" 
+      setVar s (val, LLStr) 
 
-translateItem (Init _ ident expr) = do
+translateItem _ (Init _ ident expr) = do
   let Ident s = ident
   val <- translateExpr expr
   addLocalVar s 
   setVar s val
 
--- TODO
 translateBlock (Block _ stmts) = do
   cur <- getCurrent 
   let LLCurrentBlock _ startVars = cur
@@ -513,4 +558,184 @@ translateBlock (Block _ stmts) = do
     LLCurrentBlock endBlock endVars -> do
       let finalVars = Set.foldr (undefineVar startVars) endVars endLocalVars
       setCurrent $ LLCurrentBlock endBlock finalVars
+
+getArgType :: Arg Location -> LLType
+getArgType (Arg _ t _) = convertType t
+
+
+convertType :: Type Location -> LLType
+convertType (Latte.Int _) = LLInt
+convertType (Latte.Str _) = LLStr
+convertType (Latte.Bool _) = LLBool
+convertType (Latte.Void _) = LLVoid
+
+
+builtinFnTypes :: [(String, (LLType, [LLType]))]
+builtinFnTypes = [
+	("printInt", (LLVoid, [LLInt])),
+	("printString", (LLVoid, [LLStr])),
+	("error", (LLVoid, [])),
+	("readInt", (LLInt, [])),
+	("readString", (LLStr, []))]
+
+getFnTypes :: Program Location -> Map String (LLType, [LLType])
+getFnTypes (Program _ topDefs) = Map.fromList(builtinFnTypes ++ map getFnType topDefs)
+
+getFnType :: TopDef Location -> (String, (LLType, [LLType]))
+
+getFnType (FnDef _ t ident arg block) =
+  let Ident s = ident in (s, (convertType t, map getArgType arg))
+
+
+emitGlobalStr :: (String, (Int, Int, ByteString)) -> String
+emitGlobalStr (_, (idx, len, bs)) = "@.str" ++ show idx ++ " = private constant [" ++ show len ++ " x i8] c\"" ++ concat (map (printf "\\%02X") (ByteString.unpack bs)) ++ "\\00\"\n"
+
+allToLLVM :: Program Location -> String
+allToLLVM prog = 
+  let fnTypes = getFnTypes prog in 
+    let initState = TopState fnTypes Map.empty in
+      fst $ runState (translateProgram prog) initState 
+
+llheader = (
+  "declare i8* @$concat(i8*, i8*)\n" ++
+  "declare void @printInt(i32)\n" ++
+  "declare void @printString(i8*)\n" ++
+  "declare void @error()\n" ++
+  "declare i32 @readInt()\n" ++
+  "declare i8* @readString()\n")
+
+translateProgram (Program _ topDefs) = do
+  tops <- mapM translateTopDef topDefs 
+  TopState _ strings <- get
+  let strs = map emitGlobalStr (Map.toList strings)
+  return $ llheader ++ concat (tops ++ strs)
+
+argToVar :: (Int,Arg Location) -> (String, (LLVal, LLType))
+argToVar (index, Arg _ t (Ident s)) = (s, (LLArg index, convertType t))
+
+-- lol. 
+translateTopBlock :: Block Location -> LLMonad()
+translateTopBlock block = do
+  translateBlock block
+  cur <- getCurrent 
+  if cur == LLCurrentNone then return () else endBlock LLVoidReturn 
+
+translateTopDef (FnDef _ t (Ident s)  args block) = do
+  TopState funs strings <- get
+  let initBlock = LLBlock 0 0 LLOpen
+  let initVars = Map.fromList (map argToVar (zip [0..] args))
+  let initState = LLState Map.empty (Map.singleton 0 initBlock) (LLCurrentBlock 0 initVars) Set.empty funs strings
+  let (_, LLState insns blocks _ _ _ strings2) = runState (translateTopBlock block) initState
+  put (TopState funs strings2)
+  return $ emitFun (convertType t) s args insns blocks
+
+emitBlockInsn :: Map Int (Map Int LLVal) -> (Int, LLInsn) -> String
+emitBlockInsn phiMap (idx, LLInsnAdd v1 v2) = emitBlockBiInsn idx "add i32" v1 v2
+emitBlockInsn phiMap (idx, LLInsnSub v1 v2) = emitBlockBiInsn idx "sub i32" v1 v2
+emitBlockInsn phiMap (idx, LLInsnMul v1 v2) = emitBlockBiInsn idx "mul i32" v1 v2
+emitBlockInsn phiMap (idx, LLInsnDiv v1 v2) = emitBlockBiInsn idx "sdiv i32" v1 v2
+emitBlockInsn phiMap (idx, LLInsnMod v1 v2) = emitBlockBiInsn idx "srem i32" v1 v2
+emitBlockInsn phiMap (idx, LLInsnEq v1 v2) = emitBlockBiInsn idx "icmp eq i32" v1 v2
+emitBlockInsn phiMap (idx, LLInsnNe v1 v2) = emitBlockBiInsn idx "icmp ne i32" v1 v2
+emitBlockInsn phiMap (idx, LLInsnLt v1 v2) = emitBlockBiInsn idx "icmp slt i32" v1 v2
+emitBlockInsn phiMap (idx, LLInsnLe v1 v2) = emitBlockBiInsn idx "icmp sle i32" v1 v2
+emitBlockInsn phiMap (idx, LLInsnGt v1 v2) = emitBlockBiInsn idx "icmp sgt i32" v1 v2
+emitBlockInsn phiMap (idx, LLInsnGe v1 v2) = emitBlockBiInsn idx "icmp sge i32" v1 v2
+emitBlockInsn phiMap (idx, LLInsnNeg v1) = emitBlockBiInsn idx "sub i32" (LLConstInt 0) v1
+emitBlockInsn phiMap (idx, LLInsnNot v1) = emitBlockBiInsn idx "xor i1" (LLConstBool True) v1
+emitBlockInsn phiMap (idx, LLInsnCat v1 v2) = "    %t" ++ show idx ++ " = call i8* @$concat(i8* " ++ emitVal v1 ++ ", i8* " ++ emitVal v2 ++ ")\n"
+-- LInsnCall String [(LLVal, LLType)] LLType |
+emitBlockInsn phiMap (idx, LLInsnCall fun args rtyp) = 
+  let eArgs = intercalate ", " (map emitCallArg args) in
+  case rtyp of
+    LLVoid -> "    call void @" ++ fun ++ "(" ++ eArgs ++ ")\n"
+    _ -> "    %t" ++ show idx ++ " = call " ++ emitType rtyp ++ " @" ++ fun ++ "(" ++ eArgs ++ ")\n"
+emitBlockInsn phiMap (idx, LLInsnPhi typ) = 
+  let phi = phiMap Map.! idx in
+    let srcs = map emitPhiSrc (Map.toList phi) in
+    "    %t" ++ show idx ++ " = phi " ++ emitType typ ++ " " ++ intercalate ", " srcs ++ "\n"
+
+emitCallArg :: (LLVal, LLType) -> String
+emitCallArg (v, t) = emitType t ++ " " ++ emitVal v
+
+emitPhiSrc :: (Int, LLVal) -> String
+emitPhiSrc (k, v) = "[ " ++ emitVal v ++ ", %block" ++ show k ++ " ]"
+
+emitBlockBiInsn idx op v1 v2 = "    %t" ++ show idx ++ " = " ++ op ++ " " ++ emitVal v1 ++ ", " ++ emitVal v2 ++ "\n"
+
+emitBlockEnd :: LLEnd -> String
+emitBlockEnd LLVoidReturn = "    ret void\n"
+emitBlockEnd (LLReturn (v, t)) = "    ret " ++ emitType t ++ " " ++ emitVal v ++ "\n"
+emitBlockEnd (LLCond v (b1, _) (b2, _)) = "    br i1 " ++ emitVal v ++ ", label %block" ++ show b1 ++ ", label %block" ++ show b2 ++ "\n"
+emitBlockEnd (LLJoin (b, _)) = "    br label %block" ++ show b ++ "\n"
+
+emitVal :: LLVal -> String
+emitVal (LLReg idx) = "%t" ++ show idx
+emitVal (LLConstInt i) = show i
+emitVal (LLConstBool False) = "0"
+emitVal (LLConstBool True) = "1"
+emitVal (LLConstStr idx len) = "getelementptr inbounds ([" ++ show len ++ " x i8], [" ++ show len ++ " x i8]* @.str" ++ show idx ++ ", i64 0, i64 0)"
+emitVal (LLArg idx) = "%arg" ++ show idx
+
+emitBlock :: Map Int [(Int, LLInsn)] -> Map Int (Map Int LLVal) -> (Int, LLBlock) -> String
+emitBlock insnsByBlock phiMap (blockIdx, LLBlock _ _ end) =
+  let insns = insnsByBlock Map.! blockIdx in
+    "  block" ++ show blockIdx ++ ":\n" ++ concat (map (emitBlockInsn phiMap) insns) ++ emitBlockEnd end
+
+emitFun :: LLType -> String -> [Arg Location] -> Map Int LLInstruction -> Map Int LLBlock -> String
+emitFun t s args insns blocks = 
+  let eArgs = intercalate ", " (map emitArg (zip [0..] args)) in
+    let insnByBlock = foldl sortInsn (Map.map (const []) blocks) (Map.toDescList insns) in 
+      let phiMap = Map.foldWithKey sortPhi Map.empty blocks in
+        let eBlocks = concat (map (emitBlock insnByBlock phiMap) (Map.toAscList blocks)) in
+          "define " ++ emitType t ++ " @" ++ s ++ "(" ++ eArgs ++ ") {\n" ++ eBlocks ++ "}\n\n" 
+
+
+sortInsn :: Map Int [(Int, LLInsn)] -> (Int, LLInstruction) -> Map Int [(Int, LLInsn)]
+sortInsn m1 (insIdx, (blockIndex, insn))  =
+  let tail = m1 Map.! blockIndex in 
+    Map.insert blockIndex ((insIdx, insn):tail) m1
+
+sortPhi :: Int -> LLBlock -> Map Int (Map Int LLVal) -> Map Int (Map Int LLVal)
+sortPhi blockIdx (LLBlock _ _ end) m1 = case end of
+  LLVoidReturn -> m1
+  LLReturn _ -> m1
+  LLCond _ j1 j2 -> sortPhiJump (sortPhiJump m1 j1 blockIdx) j2 blockIdx
+  LLJoin j -> sortPhiJump m1 j blockIdx
+
+sortPhiJump :: Map Int (Map Int LLVal) -> LLJump -> Int -> Map Int (Map Int LLVal)
+
+sortPhiJump m (_, mj)  blockIdx = Map.foldWithKey (sortPhiJumpVal blockIdx) m mj
+sortPhiJumpVal :: Int -> Int -> LLVal -> Map Int (Map Int LLVal) -> Map Int (Map Int LLVal)
+sortPhiJumpVal blockIdx phiIdx val m1 = 
+  let m2 = Map.findWithDefault Map.empty phiIdx m1 in 
+  Map.insert phiIdx (Map.insert blockIdx val m2) m1
+
+emitArg :: (Int, Arg Location) -> String
+emitArg (i, Arg _ t _) = emitType (convertType t) ++ " %arg" ++ show i
+
+emitType :: LLType -> String
+emitType LLInt = "i32"
+emitType LLBool = "i1"
+emitType LLStr = "i8*"
+emitType LLVoid = "void"
+
+ico :: T.Text
+ico = T.pack(".lat")
+outputName :: String -> String
+outputName f = T.unpack(Data.Maybe.fromJust(T.stripSuffix ico (T.pack f))) ++ ".ll"
+
+main :: IO ()
+main = do
+  args <- getArgs
+  text <- readFile $ head $ args
+  case pProgram $ myLexer $ text of
+        Bad s -> die ("ERROR\n" ++ s)
+        Ok tree -> do
+            case checkTypes tree of
+                Right () -> do
+			hPutStrLn stderr "OK"
+			writeFile (outputName $ head $ args) (allToLLVM tree)
+			callProcess "llvm-as" [outputName $ head $ args]
+                Left s -> die ("ERROR\n" ++ s)
 
