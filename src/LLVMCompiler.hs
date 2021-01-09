@@ -728,20 +728,23 @@ emitType LLVoid = "void"
 
 ico :: T.Text
 ico = T.pack(".lat")
-outputName :: String -> String
-outputName f = T.unpack(Data.Maybe.fromJust(T.stripSuffix ico (T.pack f))) ++ ".ll"
+baseName :: String -> String
+baseName f = T.unpack(Data.Maybe.fromJust(T.stripSuffix ico (T.pack f)))
 
 main :: IO ()
 main = do
   args <- getArgs
   text <- readFile $ head $ args
+  let base = baseName $ head $ args
+  let llFile = base ++ ".ll"
+  let bcFile = base ++ ".bc"
   case pProgram $ myLexer $ text of
         Bad s -> die ("ERROR\n" ++ s)
         Ok tree -> do
             case checkTypes tree of
                 Right () -> do
 			hPutStrLn stderr "OK"
-			writeFile (outputName $ head $ args) (allToLLVM tree)
-			callProcess "llvm-as" [outputName $ head $ args]
+			writeFile llFile (allToLLVM tree)
+			callProcess "llvm-link" [llFile, "lib/runtime.bc", "-o", bcFile]
                 Left s -> die ("ERROR\n" ++ s)
 
