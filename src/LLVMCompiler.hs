@@ -271,23 +271,20 @@ translateWhile expr stmt phiVars = do
   let curPhis = makePhis loopVars phiVars curVars
   endBlock $ LLJoin (loopBlock, curPhis)
   setCurrent $ LLCurrentBlock loopBlock loopVars
-  (cv, _)<-translateExpr expr
-  postCond <- getCurrent
-  let LLCurrentBlock postCondBlock postCondVars = postCond
-  okBlock <- startBlock postCondBlock
-  exitBlock <- startBlock postCondBlock
-  endBlock (LLCond cv (okBlock, Map.empty) (exitBlock, Map.empty))
-  setCurrent $ LLCurrentBlock okBlock postCondVars
+  okBlock <- startBlock loopBlock
+  exitBlock <- startBlock loopBlock
+  translateExprAsCond expr (okBlock, Map.empty) (exitBlock, Map.empty)
+  setCurrent $ LLCurrentBlock okBlock loopVars
   translateStmt stmt
   after <- getCurrent 
   case after of
-    LLCurrentNone -> setCurrent $ LLCurrentBlock exitBlock postCondVars
+    LLCurrentNone -> setCurrent $ LLCurrentBlock exitBlock loopVars
     LLCurrentBlock afterBlock afterVars -> do
       let actualPhiVars = Set.fromList $ map (\(a, _, _, _) -> a) (findPhis afterVars curVars)
       if Set.isSubsetOf actualPhiVars phiVars then do
         let afterPhis = makePhis loopVars phiVars afterVars
         endBlock $ LLJoin (loopBlock, afterPhis)
-        setCurrent $ LLCurrentBlock exitBlock postCondVars
+        setCurrent $ LLCurrentBlock exitBlock loopVars
       else do
         put state
         translateWhile expr stmt (Set.union phiVars actualPhiVars)
@@ -301,6 +298,30 @@ translateStmt :: Stmt Location -> LLMonad ()
 translateBlock :: Block Location -> LLMonad ()
 translateExpr :: Expr Location -> LLMonad (LLVal, LLType)
 translateItem :: LLType -> Item Location -> LLMonad()
+translateExprAsCond :: Expr Location -> LLJump -> LLJump -> LLMonad()
+
+translateExprAsCond (Not _ expr) jTrue jFalse = translateExprAsCond expr jFalse jTrue
+translateExprAsCond (EAnd _ e1 e2) jTrue jFalse = do
+  cur <- getCurrent
+  let LLCurrentBlock curBlock curVars = cur
+
+  e2Block <- startBlock curBlock
+  translateExprAsCond e1 (e2Block, Map.empty) jFalse
+  setCurrent(LLCurrentBlock e2Block curVars)
+  translateExprAsCond e2 jTrue jFalse
+
+translateExprAsCond (EOr _ e1 e2) jTrue jFalse = do
+  cur <- getCurrent
+  let LLCurrentBlock curBlock curVars = cur
+
+  e2Block <- startBlock curBlock
+  translateExprAsCond e1 jTrue (e2Block, Map.empty)
+  setCurrent(LLCurrentBlock e2Block curVars)
+  translateExprAsCond e2 jTrue jFalse
+
+translateExprAsCond expr jTrue jFalse = do
+  (v, _) <- translateExpr expr
+  endBlock (LLCond v jTrue jFalse)
 
 translateExpr (EVar loc ident) = do
   let Ident s = ident 
@@ -466,10 +487,9 @@ translateStmt (SExp _ expr) = do
   return ()
 
 translateStmt (Cond _ expr stmt) = do
-  (sv, _) <- translateExpr expr
-  case sv of
-    LLConstBool True -> translateStmt stmt
-    LLConstBool False -> return ()
+  case expr  of
+    ELitTrue _ -> translateStmt stmt
+    ELitFalse _ -> return ()
     _ -> do
       cur <- getCurrent
       let LLCurrentBlock curBlock curVars = cur
@@ -481,7 +501,7 @@ translateStmt (Cond _ expr stmt) = do
       case cond of 
         LLCurrentNone -> do
           setCurrent cur
-          endBlock (LLCond sv (condBlock, Map.empty) (joinBlock, Map.empty))
+          translateExprAsCond expr (condBlock, Map.empty) (joinBlock, Map.empty)
           setCurrent(LLCurrentBlock joinBlock curVars)
         LLCurrentBlock finalCondBlock condVars -> do
           let phis = findPhis condVars curVars
@@ -489,14 +509,13 @@ translateStmt (Cond _ expr stmt) = do
           
           endBlock (LLJoin (joinBlock, condPhis))
           setCurrent cur
-          endBlock (LLCond sv (condBlock, Map.empty) (joinBlock, curPhis))
+          translateExprAsCond expr (condBlock, Map.empty) (joinBlock, curPhis)
           setCurrent(LLCurrentBlock joinBlock joinVars)
 
 translateStmt (CondElse _ expr stmt1 stmt2) = do
-  (sv, _) <- translateExpr expr
-  case sv of
-    LLConstBool True -> translateStmt stmt1
-    LLConstBool False -> translateStmt stmt2
+  case expr of
+    ELitTrue _ -> translateStmt stmt1
+    ELitFalse _ -> translateStmt stmt2
     _ -> do
       cur <- getCurrent
       let LLCurrentBlock curBlock curVars = cur
@@ -509,7 +528,7 @@ translateStmt (CondElse _ expr stmt1 stmt2) = do
       translateStmt stmt2
       cond2 <- getCurrent
       setCurrent cur
-      endBlock (LLCond sv (condBlock1, Map.empty) (condBlock2, Map.empty))
+      translateExprAsCond expr (condBlock1, Map.empty) (condBlock2, Map.empty)
       case (cond1, cond2) of 
         (LLCurrentNone, LLCurrentNone) -> return ()
         (LLCurrentNone, LLCurrentBlock finalCond2Block condVars2) -> setCurrent cond2
