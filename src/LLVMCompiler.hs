@@ -411,7 +411,6 @@ translateExpr (ERel _ e1 (NE _) e2) = do
   return (v, LLBool)
 
 translateExpr (EAnd _ e1 e2) = do
-  (sv1, _) <- translateExpr e1
   -- what block r we in
   cur <- getCurrent
   let LLCurrentBlock curBlock curVars = cur
@@ -426,13 +425,12 @@ translateExpr (EAnd _ e1 e2) = do
   endBlock (LLJoin (joinBlock, (Map.singleton phi sv2)))
 
   setCurrent cur
-  endBlock (LLCond sv1 (condBlock, Map.empty) (joinBlock, Map.singleton phi sv1))
+  translateExprAsCond e1 (condBlock, Map.empty) (joinBlock, Map.singleton phi (LLConstBool False))
 
   setCurrent(LLCurrentBlock joinBlock curVars)  
   return (fv, LLBool)
 
 translateExpr (EOr _ e1 e2) = do
-  (sv1, _) <- translateExpr e1
   -- what block r we in
   cur <- getCurrent
   let LLCurrentBlock curBlock curVars = cur
@@ -448,7 +446,7 @@ translateExpr (EOr _ e1 e2) = do
   endBlock (LLJoin (joinBlock, (Map.singleton phi sv2)))
 
   setCurrent cur
-  endBlock (LLCond sv1 (joinBlock, Map.singleton phi sv1) (condBlock, Map.empty))
+  translateExprAsCond e1 (joinBlock, Map.singleton phi (LLConstBool True)) (condBlock, Map.empty)
 
   setCurrent(LLCurrentBlock joinBlock curVars)  
   return (fv, LLBool)
