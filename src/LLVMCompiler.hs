@@ -32,30 +32,31 @@ import ErrM
 
 type Location = Maybe (Int, Int)
 -- lol
-data LLState = LLState (Map Int LLInstruction) (Map Int LLBlock) LLCurrent LLVarsUndo LLFuncMap LLStringMap
+data LLState = LLState (Map Int LLInstruction) (Map Int LLBlock) LLCurrent LLVarsUndo LLFuncMap LLStringMap (Map LLInsn Int)
 type LLVarsUndo = Map String (Maybe (LLVal, LLType))
 type LLFuncMap = Map String (LLType, [LLType])
 type LLStringMap = Map String (Int, Int, ByteString)
 type LLVarMap = Map String (LLVal, LLType)
 type LLInstruction = (Int, LLInsn)
-data LLInsn = 	LLInsnAdd LLVal LLVal | 
-		LLInsnSub LLVal LLVal |
-		LLInsnNeg LLVal |
-		LLInsnNot LLVal |
-		LLInsnMul LLVal LLVal |
-		LLInsnDiv LLVal LLVal |
-		LLInsnMod LLVal LLVal |
-		LLInsnEq  LLType LLVal LLVal |
-		LLInsnNe  LLType LLVal LLVal |
-		LLInsnLt  LLVal LLVal |
-		LLInsnLe  LLVal LLVal |
-		LLInsnGt  LLVal LLVal |
-		LLInsnGe  LLVal LLVal |
-		LLInsnCat LLVal LLVal |
-		LLInsnCall String [(LLVal, LLType)] LLType |
-		LLInsnPhi LLType 
-data LLType = LLInt | LLStr | LLBool | LLVoid deriving (Eq, Show)
-data LLVal = LLReg Int | LLConstInt Integer | LLConstBool Bool | LLConstStr Int Int | LLArg Int deriving Eq
+data LLInsn = LLInsnAdd LLVal LLVal | 
+        LLInsnSub LLVal LLVal |
+        LLInsnNeg LLVal |
+        LLInsnNot LLVal |
+        LLInsnMul LLVal LLVal |
+        LLInsnDiv LLVal LLVal |
+        LLInsnMod LLVal LLVal |
+        LLInsnEq  LLType LLVal LLVal |
+        LLInsnNe  LLType LLVal LLVal |
+        LLInsnLt  LLVal LLVal |
+        LLInsnLe  LLVal LLVal |
+        LLInsnGt  LLVal LLVal |
+        LLInsnGe  LLVal LLVal |
+        LLInsnCat LLVal LLVal |
+        LLInsnCall String [(LLVal, LLType)] LLType |
+        LLInsnPhi LLType deriving (Eq, Ord)
+
+data LLType = LLInt | LLStr | LLBool | LLVoid deriving (Eq, Ord, Show)
+data LLVal = LLReg Int | LLConstInt Integer | LLConstBool Bool | LLConstStr Int Int | LLArg Int deriving (Eq, Ord)
 -- params are: parent index and depth and end
 data LLBlock = LLBlock Int Int LLEnd 
 type LLJump = (Int, Map Int LLVal)
@@ -92,7 +93,6 @@ findPhis_ ((k,(v,t)):tail) m2 =
 findPhis :: LLVarMap -> LLVarMap -> [(String, LLType, LLVal, LLVal)]
 findPhis m1 m2 = findPhis_ (Map.toList m1) m2
 
--- 
 emitPhi :: Int -> (LLVarMap, Map Int LLVal, Map Int LLVal) -> (String, LLType, LLVal, LLVal) -> LLMonad (LLVarMap, Map Int LLVal, Map Int LLVal)
 
 emitPhi block (mVars, mPhi1, mPhi2) (s, t, v1, v2) = do
@@ -103,27 +103,59 @@ emitPhi block (mVars, mPhi1, mPhi2) (s, t, v1, v2) = do
 getVar :: String -> LLMonad (LLVal, LLType)
 getVar a = do
   state <- get 
-  let LLState _ _ (LLCurrentBlock _ m) _ _ _ = state
+  let LLState _ _ (LLCurrentBlock _ m) _ _ _ _= state
   let Just v = Map.lookup a m -- already type checked
   return v
 
 getFunc :: String -> LLMonad (LLType, [LLType])
 getFunc a = do
   state <- get
-  let LLState _ _ _ _ m _ = state
+  let LLState _ _ _ _ m _ _ = state
   let Just v = Map.lookup a m
   return v
 
+blockLCA :: Int -> Int -> LLMonad(Int) 
+blockLCA b1 b2 = do
+  
+  LLBlock parent1 depth1 _ <- getBlock b1
+  LLBlock parent2 depth2 _ <- getBlock b2
+  if b1 == b2 then return b1 else
+    if depth2 > depth1 
+      then blockLCA parent2 b1
+      else if depth1 > depth2
+        then blockLCA parent1 b2
+        else blockLCA parent1 parent2
+
+-- common subexprs optimalization
 emitSimpleExpr :: LLInsn -> LLMonad LLVal
-emitSimpleExpr = emitInsn
+emitSimpleExpr insn = do
+  state <- get
+  let LLState insns a b c d e subExprs = state
+  case Map.lookup insn subExprs of
+    Just idx -> do
+      cur <- getCurrent
+      let LLCurrentBlock curBlock _ = cur
+      let (otherBlock, _) = insns Map.! idx
+      lcaBlock <- blockLCA curBlock otherBlock
+      let newInsns = Map.insert idx (lcaBlock, insn) insns
+      put (LLState newInsns a b c d e subExprs)
+      return(LLReg idx)
+    Nothing -> do
+      val <- emitInsn insn
+      let LLReg idx = val
+      let newSubExprs = Map.insert insn idx subExprs
+      state <- get
+      let LLState insns a b c d e _ = state
+      put (LLState insns a b c d e newSubExprs)
+      return(val)
 
 emitInsnToBlock :: Int -> LLInsn -> LLMonad LLVal
 emitInsnToBlock block insn = do
   state <- get
-  let LLState m1 a b c d e= state
+  let LLState m1 a b c d e f= state
   let index = Map.size m1
   let m = Map.insert index (block,insn) m1
-  put (LLState m a b c d e)
+  put (LLState m a b c d e f)
   return (LLReg index)
 
 emitInsn :: LLInsn -> LLMonad LLVal
@@ -135,31 +167,31 @@ emitInsn insn = do
 addLocalVar :: String -> LLMonad ()
 addLocalVar v = do
   state <- get
-  let LLState a b c m1 d e = state
+  let LLState a b c m1 d e f = state
   let LLCurrentBlock _ vars = c
   let m = if Map.member v m1 then m1 else Map.insert v (Map.lookup v vars) m1
-  put (LLState a b c m d e)
+  put (LLState a b c m d e f)
   return ()
 
 getVarsUndo :: LLMonad LLVarsUndo
 getVarsUndo = do
   state <- get 
-  let LLState _ _ _ m _ _= state
+  let LLState _ _ _ m _ _ _ = state
   return m
 
 setVarsUndo :: LLVarsUndo -> LLMonad ()
 setVarsUndo m = do
   state <- get
-  let LLState a b c _ d e = state
-  put (LLState a b c m d e)
+  let LLState a b c _ d e f = state
+  put (LLState a b c m d e f)
   return ()
 
 setVar :: String -> (LLVal, LLType) -> LLMonad ()
 setVar s v = do
   state <- get
-  let LLState a b (LLCurrentBlock i m1) c d e = state
+  let LLState a b (LLCurrentBlock i m1) c d e f = state
   let m = Map.insert s v m1
-  put (LLState a b (LLCurrentBlock i m) c d e)
+  put (LLState a b (LLCurrentBlock i m) c d e f)
   return ()
 
 undoVar :: String -> Maybe (LLVal, LLType) -> LLVarMap -> LLVarMap
@@ -169,14 +201,14 @@ undoVar var (Just val) acc = Map.insert var val acc
 getCurrent :: LLMonad LLCurrent
 getCurrent = do
   state <- get
-  let LLState _ _ c _ _ _ = state
+  let LLState _ _ c _ _ _ _ = state
   return c
 
 setCurrent :: LLCurrent -> LLMonad ()
 setCurrent c = do
   state <- get
-  let LLState a b _ d e f = state
-  put(LLState a b c d e f)
+  let LLState a b _ d e f g = state
+  put(LLState a b c d e f g)
   return ()
 
 
@@ -186,27 +218,27 @@ startBlock parentIndex = do
   let LLBlock _ parentDepth _ = parentBlock
   let newBlock = LLBlock parentIndex (parentDepth+1) LLOpen
   state <- get
-  let LLState a m1 b c d e = state
+  let LLState a m1 b c d e f = state
   let index = Map.size m1
   let m = Map.insert index newBlock m1
-  put (LLState a m b c d e)
+  put (LLState a m b c d e f)
   return index
 
 getBlock :: Int -> LLMonad LLBlock
 getBlock index = do
   state <- get 
-  let LLState _ m _ _ _ _ = state
+  let LLState _ m _ _ _ _ _ = state
   return (m Map.! index)
 
 endBlock :: LLEnd -> LLMonad ()
 endBlock end = do
   state <- get
-  let LLState a m1 (LLCurrentBlock i _) c d e = state
+  let LLState a m1 (LLCurrentBlock i _) c d e f = state
   let currentBlock = m1 Map.! i
   let LLBlock parent depth _ = currentBlock
   let newBlock = LLBlock parent depth end
   let m = Map.insert i newBlock m1
-  put (LLState a m LLCurrentNone c d e)
+  put (LLState a m LLCurrentNone c d e f)
   return ()
 
 
@@ -227,14 +259,14 @@ emitLoopPhi block vars s = do
 emitString :: String -> LLMonad LLVal
 emitString string = do
   state <- get
-  let LLState a b c d e m1 = state
+  let LLState a b c d e m1 f= state
   case Map.lookup string m1 of
     Nothing -> do
       let idx = Map.size m1
       let bs = encodeUtf8 $ T.pack string
       let l = ByteString.length bs + 1
       let m = Map.insert string (idx, l, bs) m1
-      put (LLState a b c d e m)
+      put (LLState a b c d e m f)
       return (LLConstStr idx l)
     Just (idx, l, _) -> return (LLConstStr idx l)
 
@@ -593,11 +625,11 @@ convertType (Latte.Void _) = LLVoid
 
 builtinFnTypes :: [(String, (LLType, [LLType]))]
 builtinFnTypes = [
-	("printInt", (LLVoid, [LLInt])),
-	("printString", (LLVoid, [LLStr])),
-	("error", (LLVoid, [])),
-	("readInt", (LLInt, [])),
-	("readString", (LLStr, []))]
+    ("printInt", (LLVoid, [LLInt])),
+    ("printString", (LLVoid, [LLStr])),
+    ("error", (LLVoid, [])),
+    ("readInt", (LLInt, [])),
+    ("readString", (LLStr, []))]
 
 getFnTypes :: Program Location -> LLFuncMap
 getFnTypes (Program _ topDefs) = Map.fromList(builtinFnTypes ++ map getFnType topDefs)
@@ -645,8 +677,8 @@ translateTopDef (FnDef _ t (Ident s)  args block) = do
   TopState funs strings <- get
   let initBlock = LLBlock 0 0 LLOpen
   let initVars = Map.fromList (map argToVar (zip [0..] args))
-  let initState = LLState Map.empty (Map.singleton 0 initBlock) (LLCurrentBlock 0 initVars) Map.empty funs strings
-  let (_, LLState insns blocks _ _ _ strings2) = runState (translateTopBlock block) initState
+  let initState = LLState Map.empty (Map.singleton 0 initBlock) (LLCurrentBlock 0 initVars) Map.empty funs strings Map.empty
+  let (_, LLState insns blocks _ _ _ strings2 _) = runState (translateTopBlock block) initState
   put (TopState funs strings2)
   return $ emitFun (convertType t) s args insns blocks
 
@@ -760,8 +792,8 @@ main = do
         Ok tree -> do
             case checkTypes tree of
                 Right () -> do
-			hPutStrLn stderr "OK"
-			writeFile llFile (allToLLVM tree)
-			callProcess "llvm-link" [llFile, "lib/runtime.bc", "-o", bcFile]
+                    hPutStrLn stderr "OK"
+                    writeFile llFile (allToLLVM tree)
+                    callProcess "llvm-link" [llFile, "lib/runtime.bc", "-o", bcFile]
                 Left s -> die ("ERROR\n" ++ s)
 
