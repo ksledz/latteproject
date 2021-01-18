@@ -94,7 +94,7 @@ findPhis m1 m2 = findPhis_ (Map.toList m1) m2
 emitPhi :: Int -> (LLVarMap, Map Int LLVal, Map Int LLVal) -> (String, LLType, LLVal, LLVal) -> LLMonad (LLVarMap, Map Int LLVal, Map Int LLVal)
 
 emitPhi block (mVars, mPhi1, mPhi2) (s, t, v1, v2) = do
-  vp <- emitInsnToBlock block (LLInsnPhi t)
+  vp <- translateInsnToBlock block (LLInsnPhi t)
   let LLReg phi = vp
   return (Map.insert s (vp, t) mVars, Map.insert phi v1 mPhi1, Map.insert phi v2 mPhi2)
 
@@ -138,7 +138,7 @@ translateSimpleExpr insn = do
       put (LLState newInsns a b c d e subExprs)
       return(LLReg idx)
     Nothing -> do
-      val <- emitInsn insn
+      val <- translateInsn insn
       let LLReg idx = val
       let newSubExprs = Map.insert insn idx subExprs
       state <- get
@@ -146,8 +146,8 @@ translateSimpleExpr insn = do
       put (LLState insns a b c d e newSubExprs)
       return(val)
 
-emitInsnToBlock :: Int -> LLInsn -> LLMonad LLVal
-emitInsnToBlock block insn = do
+translateInsnToBlock :: Int -> LLInsn -> LLMonad LLVal
+translateInsnToBlock block insn = do
   state <- get
   let LLState m1 a b c d e f= state
   let index = Map.size m1
@@ -155,11 +155,11 @@ emitInsnToBlock block insn = do
   put (LLState m a b c d e f)
   return (LLReg index)
 
-emitInsn :: LLInsn -> LLMonad LLVal
-emitInsn insn = do
+translateInsn :: LLInsn -> LLMonad LLVal
+translateInsn insn = do
   cur <- getCurrent
   let LLCurrentBlock block _ = cur
-  emitInsnToBlock block insn
+  translateInsnToBlock block insn
 
 addLocalVar :: String -> LLMonad ()
 addLocalVar v = do
@@ -246,14 +246,14 @@ makePhi phiVars srcVars phi =
 makePhis :: LLVarMap -> (Set String) -> LLVarMap -> (Map Int LLVal)
 makePhis phiVars phis srcVars = Map.fromList(map (makePhi phiVars srcVars) (Set.toList phis))
 
-emitLoopPhi :: Int -> LLVarMap -> String -> LLMonad LLVarMap
-emitLoopPhi block vars s = do
+translateLoopPhi :: Int -> LLVarMap -> String -> LLMonad LLVarMap
+translateLoopPhi block vars s = do
   let typ = snd $ vars Map.! s
-  val <- emitInsnToBlock block (LLInsnPhi typ)
+  val <- translateInsnToBlock block (LLInsnPhi typ)
   return (Map.insert s (val, typ) vars)
 
-emitString :: String -> LLMonad LLVal
-emitString string = do
+translateString :: String -> LLMonad LLVal
+translateString string = do
   state <- get
   let LLState a b c d e m1 f= state
   case Map.lookup string m1 of
@@ -273,7 +273,7 @@ translateWhile (ELitTrue loc)  stmt phiVars = do
   cur <- getCurrent
   let LLCurrentBlock curBlock curVars = cur
   loopBlock <- startBlock curBlock
-  loopVars <- foldM (emitLoopPhi loopBlock) curVars phiVars
+  loopVars <- foldM (translateLoopPhi loopBlock) curVars phiVars
   let curPhis = makePhis loopVars phiVars curVars
   endBlock $ LLJoin (loopBlock, curPhis)
   setCurrent $ LLCurrentBlock loopBlock loopVars
@@ -295,7 +295,7 @@ translateWhile expr stmt phiVars = do
   cur <- getCurrent
   let LLCurrentBlock curBlock curVars = cur
   loopBlock <- startBlock curBlock
-  loopVars <- foldM (emitLoopPhi loopBlock) curVars phiVars
+  loopVars <- foldM (translateLoopPhi loopBlock) curVars phiVars
   let curPhis = makePhis loopVars phiVars curVars
   endBlock $ LLJoin (loopBlock, curPhis)
   setCurrent $ LLCurrentBlock loopBlock loopVars
@@ -355,7 +355,7 @@ translateExpr (ELitInt _ i) = return (LLConstInt i, LLInt)
 translateExpr (ELitTrue _) = return (LLConstBool True, LLBool)
 translateExpr (ELitFalse _) = return (LLConstBool False, LLBool)
 translateExpr (EString _ string) = do 
-  val <- emitString (unescape string)
+  val <- translateString (unescape string)
   return (val, LLStr)
 
 translateExpr (Neg _ expr) = do
@@ -440,7 +440,7 @@ translateExpr (EAnd _ e1 e2) = do
   let LLCurrentBlock curBlock curVars = cur
 
   joinBlock <- startBlock curBlock
-  fv <- emitInsnToBlock joinBlock (LLInsnPhi LLBool)
+  fv <- translateInsnToBlock joinBlock (LLInsnPhi LLBool)
   let LLReg phi = fv
 
   condBlock <- startBlock curBlock
@@ -461,7 +461,7 @@ translateExpr (EOr _ e1 e2) = do
 
   joinBlock <- startBlock curBlock
   setCurrent(LLCurrentBlock joinBlock curVars)  
-  fv <- emitInsn (LLInsnPhi LLBool)
+  fv <- translateInsn (LLInsnPhi LLBool)
   let LLReg phi = fv
 
   condBlock <- startBlock curBlock
@@ -479,7 +479,7 @@ translateExpr (EApp _ i exprs) = do
   let Ident s = i
   args <- mapM translateExpr exprs 
   (rt, _ ) <- getFunc s 
-  v <- emitInsn (LLInsnCall s args rt)
+  v <- translateInsn (LLInsnCall s args rt)
   return (v, rt)
 
 translateItem t (NoInit _ ident) = do
@@ -489,7 +489,7 @@ translateItem t (NoInit _ ident) = do
     LLInt -> setVar s (LLConstInt 0, LLInt)
     LLBool -> setVar s (LLConstBool False, LLBool)
     LLStr -> do
-      val <- emitString "" 
+      val <- translateString "" 
       setVar s (val, LLStr) 
 
 translateItem _ (Init _ ident expr) = do
