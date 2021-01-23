@@ -67,6 +67,7 @@ data Stmt a
     | Cond a (Expr a) (Stmt a)
     | CondElse a (Expr a) (Stmt a) (Stmt a)
     | While a (Expr a) (Stmt a)
+    | For a (Type a) Ident (Expr a) (Stmt a)
     | SExp a (Expr a)
   deriving (C.Eq, C.Ord, C.Show, C.Read)
 
@@ -83,6 +84,7 @@ instance C.Functor Stmt where
         Cond a expr stmt -> Cond (f a) (fmap f expr) (fmap f stmt)
         CondElse a expr stmt1 stmt2 -> CondElse (f a) (fmap f expr) (fmap f stmt1) (fmap f stmt2)
         While a expr stmt -> While (f a) (fmap f expr) (fmap f stmt)
+        For a type_ ident expr stmt -> For (f a) (fmap f type_) ident (fmap f expr) (fmap f stmt)
         SExp a expr -> SExp (f a) (fmap f expr)
 
 data Item a = NoInit a Ident | Init a Ident (Expr a)

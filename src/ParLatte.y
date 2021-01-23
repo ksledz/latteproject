@@ -26,33 +26,35 @@ import LexLatte
   '--' { PT _ (TS _ 13) }
   '.' { PT _ (TS _ 14) }
   '/' { PT _ (TS _ 15) }
-  ';' { PT _ (TS _ 16) }
-  '<' { PT _ (TS _ 17) }
-  '<=' { PT _ (TS _ 18) }
-  '=' { PT _ (TS _ 19) }
-  '==' { PT _ (TS _ 20) }
-  '>' { PT _ (TS _ 21) }
-  '>=' { PT _ (TS _ 22) }
-  '[' { PT _ (TS _ 23) }
-  '[]' { PT _ (TS _ 24) }
-  ']' { PT _ (TS _ 25) }
-  'boolean' { PT _ (TS _ 26) }
-  'class' { PT _ (TS _ 27) }
-  'else' { PT _ (TS _ 28) }
-  'extends' { PT _ (TS _ 29) }
-  'false' { PT _ (TS _ 30) }
-  'if' { PT _ (TS _ 31) }
-  'int' { PT _ (TS _ 32) }
-  'new' { PT _ (TS _ 33) }
-  'return' { PT _ (TS _ 34) }
-  'self' { PT _ (TS _ 35) }
-  'string' { PT _ (TS _ 36) }
-  'true' { PT _ (TS _ 37) }
-  'void' { PT _ (TS _ 38) }
-  'while' { PT _ (TS _ 39) }
-  '{' { PT _ (TS _ 40) }
-  '||' { PT _ (TS _ 41) }
-  '}' { PT _ (TS _ 42) }
+  ':' { PT _ (TS _ 16) }
+  ';' { PT _ (TS _ 17) }
+  '<' { PT _ (TS _ 18) }
+  '<=' { PT _ (TS _ 19) }
+  '=' { PT _ (TS _ 20) }
+  '==' { PT _ (TS _ 21) }
+  '>' { PT _ (TS _ 22) }
+  '>=' { PT _ (TS _ 23) }
+  '[' { PT _ (TS _ 24) }
+  '[]' { PT _ (TS _ 25) }
+  ']' { PT _ (TS _ 26) }
+  'boolean' { PT _ (TS _ 27) }
+  'class' { PT _ (TS _ 28) }
+  'else' { PT _ (TS _ 29) }
+  'extends' { PT _ (TS _ 30) }
+  'false' { PT _ (TS _ 31) }
+  'for' { PT _ (TS _ 32) }
+  'if' { PT _ (TS _ 33) }
+  'int' { PT _ (TS _ 34) }
+  'new' { PT _ (TS _ 35) }
+  'return' { PT _ (TS _ 36) }
+  'self' { PT _ (TS _ 37) }
+  'string' { PT _ (TS _ 38) }
+  'true' { PT _ (TS _ 39) }
+  'void' { PT _ (TS _ 40) }
+  'while' { PT _ (TS _ 41) }
+  '{' { PT _ (TS _ 42) }
+  '||' { PT _ (TS _ 43) }
+  '}' { PT _ (TS _ 44) }
   L_Ident  { PT _ (TV _) }
   L_integ  { PT _ (TI _) }
   L_quoted { PT _ (TL _) }
@@ -115,6 +117,7 @@ Stmt : ';' { (Just (tokenLineCol $1), AbsLatte.Empty (Just (tokenLineCol $1))) }
      | 'if' '(' Expr ')' Stmt { (Just (tokenLineCol $1), AbsLatte.Cond (Just (tokenLineCol $1)) (snd $3) (snd $5)) }
      | 'if' '(' Expr ')' Stmt 'else' Stmt { (Just (tokenLineCol $1), AbsLatte.CondElse (Just (tokenLineCol $1)) (snd $3) (snd $5) (snd $7)) }
      | 'while' '(' Expr ')' Stmt { (Just (tokenLineCol $1), AbsLatte.While (Just (tokenLineCol $1)) (snd $3) (snd $5)) }
+     | 'for' '(' Type Ident ':' Expr ')' Stmt { (Just (tokenLineCol $1), AbsLatte.For (Just (tokenLineCol $1)) (snd $3) (snd $4) (snd $6) (snd $8)) }
      | Expr ';' { (fst $1, AbsLatte.SExp (fst $1) (snd $1)) }
 
 Item :: { (Maybe (Int, Int),  (AbsLatte.Item (Maybe (Int, Int))) ) }

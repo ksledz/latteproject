@@ -10,7 +10,7 @@ import Control.Monad.Except
 import AbsLatte
 import qualified AbsLatte as Latte
 
-data TCType = TCInt | TCStr | TCBool | TCVoid | TCFun TCType [TCType] deriving Eq
+data TCType = TCInt | TCStr | TCBool | TCVoid | TCFun TCType [TCType] | TCArray TCType | TCObject String deriving Eq
 type Location = Maybe (Int, Int)
 type TypeMonad a = ReaderT (Map Ident TCType, TCType) (Except (Location, String)) a
 
@@ -54,6 +54,8 @@ convertType (Latte.Int _) = TCInt
 convertType (Latte.Str _) = TCStr
 convertType (Latte.Bool _) = TCBool
 convertType (Latte.Void _) = TCVoid
+convertType (Latte.Arr _ t) = TCArray $ convertType t
+convertType (Latte.Struct _ i) = let Ident s = i in TCObject s
 
 makePair :: Arg a -> (Ident, TCType)
 makePair (Arg _ t i) = (i, convertType t)
@@ -158,6 +160,13 @@ checkStmt (While loc expr stmt) = do
     ELitTrue _ -> return True
     _ -> return False
 
+checkStmt (For loc t ident expr stmt) = do
+  let t1 = convertType t
+  t2 <- checkExpr expr
+  unless (t2 == TCArray t1) $ throwError (loc, "wrong type of loop variable")
+  local (first (Map.insert ident t1) ) $ checkStmt stmt
+
+
 
 checkStmt (SExp _ expr) = do checkExpr expr; return False
 
@@ -188,6 +197,28 @@ checkExpr (EVar loc ident) = getType ident loc
 checkExpr (ELitInt _ integer) = return TCInt
 checkExpr (ELitTrue _) = return TCBool
 checkExpr (ELitFalse _) = return TCBool
+checkExpr (EArr loc t expr) = do
+  t1 <- checkExpr expr
+  unless (t1 == TCInt) $ throwError (loc, "wrong array length type")
+  return $ TCArray $ convertType t
+
+checkExpr (EIndex loc e1 e2) = do
+  t1 <- checkExpr e1
+  t2 <- checkExpr e2
+  unless (t2 == TCInt) $ throwError (loc, "wrong array index type")
+  case t1 of
+    TCArray t -> return t
+    _ -> throwError (loc, "sweet jesus, pooh! that's not an array-able type")
+
+checkExpr (EField  loc expr ident) = do
+  t1 <- checkExpr expr
+  let Ident s = ident
+  case t1 of
+    TCArray _ -> do
+      if (s == "length") then return TCInt else throwError (loc, "array doesnt have such a field")
+      -- TODO object handling in the future
+    _ -> throwError (loc, "this doesn't have fields")
+
 checkExpr (EApp loc ident exprs) = do
   t <- getType ident loc
   types <- mapM checkExpr exprs
