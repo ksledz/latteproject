@@ -19,12 +19,27 @@ instance C.Functor Program where
     fmap f x = case x of
         Program a topdefs -> Program (f a) (map (fmap f) topdefs)
 
-data TopDef a = FnDef a (Type a) Ident [Arg a] (Block a)
+data TopDef a
+    = FnDef a (Type a) Ident [Arg a] (Block a)
+    | ClassDef a Ident [ClassItem a]
+    | ClassEDef a Ident Ident [ClassItem a]
   deriving (C.Eq, C.Ord, C.Show, C.Read)
 
 instance C.Functor TopDef where
     fmap f x = case x of
         FnDef a type_ ident args block -> FnDef (f a) (fmap f type_) ident (map (fmap f) args) (fmap f block)
+        ClassDef a ident classitems -> ClassDef (f a) ident (map (fmap f) classitems)
+        ClassEDef a ident1 ident2 classitems -> ClassEDef (f a) ident1 ident2 (map (fmap f) classitems)
+
+data ClassItem a
+    = FieldDef a (Type a) Ident
+    | MethodDef a (Type a) Ident [Arg a] (Block a)
+  deriving (C.Eq, C.Ord, C.Show, C.Read)
+
+instance C.Functor ClassItem where
+    fmap f x = case x of
+        FieldDef a type_ ident -> FieldDef (f a) (fmap f type_) ident
+        MethodDef a type_ ident args block -> MethodDef (f a) (fmap f type_) ident (map (fmap f) args) (fmap f block)
 
 data Arg a = Arg a (Type a) Ident
   deriving (C.Eq, C.Ord, C.Show, C.Read)
@@ -44,9 +59,9 @@ data Stmt a
     = Empty a
     | BStmt a (Block a)
     | Decl a (Type a) [Item a]
-    | Ass a Ident (Expr a)
-    | Incr a Ident
-    | Decr a Ident
+    | Ass a (Expr a) (Expr a)
+    | Incr a (Expr a)
+    | Decr a (Expr a)
     | Ret a (Expr a)
     | VRet a
     | Cond a (Expr a) (Stmt a)
@@ -60,9 +75,9 @@ instance C.Functor Stmt where
         Empty a -> Empty (f a)
         BStmt a block -> BStmt (f a) (fmap f block)
         Decl a type_ items -> Decl (f a) (fmap f type_) (map (fmap f) items)
-        Ass a ident expr -> Ass (f a) ident (fmap f expr)
-        Incr a ident -> Incr (f a) ident
-        Decr a ident -> Decr (f a) ident
+        Ass a expr1 expr2 -> Ass (f a) (fmap f expr1) (fmap f expr2)
+        Incr a expr -> Incr (f a) (fmap f expr)
+        Decr a expr -> Decr (f a) (fmap f expr)
         Ret a expr -> Ret (f a) (fmap f expr)
         VRet a -> VRet (f a)
         Cond a expr stmt -> Cond (f a) (fmap f expr) (fmap f stmt)
@@ -83,6 +98,7 @@ data Type a
     | Str a
     | Bool a
     | Void a
+    | Struct a Ident
     | Arr a (Type a)
     | Fun a (Type a) [Type a]
   deriving (C.Eq, C.Ord, C.Show, C.Read)
@@ -93,6 +109,7 @@ instance C.Functor Type where
         Str a -> Str (f a)
         Bool a -> Bool (f a)
         Void a -> Void (f a)
+        Struct a ident -> Struct (f a) ident
         Arr a type_ -> Arr (f a) (fmap f type_)
         Fun a type_ types -> Fun (f a) (fmap f type_) (map (fmap f) types)
 
@@ -101,9 +118,15 @@ data Expr a
     | ELitInt a Integer
     | ELitTrue a
     | ELitFalse a
+    | ESelf a
     | EApp a Ident [Expr a]
     | EString a String
     | EArr a (Type a) (Expr a)
+    | EField a (Expr a) Ident
+    | EMthdApp a (Expr a) Ident [Expr a]
+    | EIndex a (Expr a) (Expr a)
+    | EObject a Ident
+    | ENull a (Type a)
     | Neg a (Expr a)
     | Not a (Expr a)
     | EMul a (Expr a) (MulOp a) (Expr a)
@@ -119,9 +142,15 @@ instance C.Functor Expr where
         ELitInt a integer -> ELitInt (f a) integer
         ELitTrue a -> ELitTrue (f a)
         ELitFalse a -> ELitFalse (f a)
+        ESelf a -> ESelf (f a)
         EApp a ident exprs -> EApp (f a) ident (map (fmap f) exprs)
         EString a string -> EString (f a) string
         EArr a type_ expr -> EArr (f a) (fmap f type_) (fmap f expr)
+        EField a expr ident -> EField (f a) (fmap f expr) ident
+        EMthdApp a expr ident exprs -> EMthdApp (f a) (fmap f expr) ident (map (fmap f) exprs)
+        EIndex a expr1 expr2 -> EIndex (f a) (fmap f expr1) (fmap f expr2)
+        EObject a ident -> EObject (f a) ident
+        ENull a type_ -> ENull (f a) (fmap f type_)
         Neg a expr -> Neg (f a) (fmap f expr)
         Not a expr -> Not (f a) (fmap f expr)
         EMul a expr1 mulop expr2 -> EMul (f a) (fmap f expr1) (fmap f mulop) (fmap f expr2)

@@ -6,7 +6,17 @@ Program.   Program ::= [TopDef] ;
 
 FnDef.	   TopDef ::= Type Ident "(" [Arg] ")" Block ;
 
+ClassDef.  TopDef ::= "class" Ident "{" [ClassItem] "}" ;
+
+ClassEDef. TopDef ::= "class" Ident "extends" Ident "{" [ClassItem] "}" ;
+
+FieldDef.  ClassItem ::= Type Ident ";" ;
+
+MethodDef. ClassItem ::= Type Ident "(" [Arg] ")" Block ;
+
 separator nonempty TopDef "" ;
+
+separator nonempty ClassItem "" ;
 
 Arg. 	   Arg ::= Type Ident;
 
@@ -30,11 +40,11 @@ Init.      Item ::= Ident "=" Expr ;
 
 separator nonempty Item "," ;
 
-Ass.       Stmt ::= Ident "=" Expr  ";" ;
+Ass.       Stmt ::= Expr "=" Expr  ";" ;
 
-Incr.      Stmt ::= Ident "++"  ";" ;
+Incr.      Stmt ::= Expr "++"  ";" ;
 
-Decr.      Stmt ::= Ident "--"  ";" ;
+Decr.      Stmt ::= Expr "--"  ";" ;
 
 Ret.       Stmt ::= "return" Expr ";" ;
 
@@ -58,6 +68,8 @@ Bool.      Type ::= "boolean" ;
 
 Void.      Type ::= "void" ;
 
+Struct.    Type ::= Ident;
+
 Arr.	   Type ::= Type "[]";
 
 internal   Fun. Type ::= Type "(" [Type] ")" ;
@@ -74,11 +86,23 @@ ELitTrue.  Expr6 ::= "true" ;
 
 ELitFalse. Expr6 ::= "false" ;
 
+ESelf.     Expr6 ::= "self" ;
+
 EApp.      Expr6 ::= Ident "(" [Expr] ")" ;
 
 EString.   Expr6 ::= String ;
 
 EArr.      Expr6 ::= "new" Type "[" Expr "]"; 
+
+EField.    Expr6 ::= Expr6 "." Ident;
+
+EMthdApp.  Expr6 ::= Expr6 "." Ident "(" [Expr] ")" ;
+
+EIndex.    Expr6 ::= Expr6 "[" Expr "]";
+
+EObject.   Expr5 ::= "new" Ident; 
+
+ENull.     Expr6 ::= "(" Type ")null";
 
 Neg.       Expr5 ::= "-" Expr6 ;
 

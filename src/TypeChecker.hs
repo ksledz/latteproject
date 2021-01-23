@@ -16,7 +16,7 @@ type TypeMonad a = ReaderT (Map Ident TCType, TCType) (Except (Location, String)
 
 runTypeMonad :: TypeMonad a -> Either String a
 runTypeMonad a = case runExcept $ runReaderT a  (Map.empty, TCVoid) of Right x -> Right x
-                                                                       Left ((Just (l, c)), s) -> Left ("type error at line " ++ show l ++ ", column " ++ show c ++ ": "++ s)                                                                       
+                                                                       Left ((Just (l, c)), s) -> Left ("type error at line " ++ show l ++ ", column " ++ show c ++ ": "++ s)
                                                                        Left (Nothing, s) -> Left s
 checkTypes :: Program Location -> Either String ()
 
@@ -105,19 +105,19 @@ checkStmt :: Stmt Location -> TypeMonad Bool
 checkStmt (Empty _) = return False
 checkStmt (BStmt _ b) = checkBlock b Set.empty
 checkStmt (Decl _ t i) = do mapM_ (checkItem $ convertType t) i; return False
-checkStmt (Ass loc ident expr) = do
+checkStmt (Ass loc lval expr) = do
   t <- checkExpr expr
-  ti <- getType ident loc
+  ti <- checkLValue lval loc
   unless (t == ti) $ throwError (loc, "wrong types")
   return False
 
-checkStmt (Incr loc ident) = do
-  t <- getType ident loc
+checkStmt (Incr loc lval) = do
+  t <- checkLValue lval loc
   unless (t == TCInt) $ throwError (loc, "wrong type for increasing")
   return False
 
-checkStmt (Decr loc ident) = do
-  t <- getType ident loc
+checkStmt (Decr loc lval) = do
+  t <- checkLValue lval loc
   unless (t == TCInt) $ throwError (loc, "wrong type for decreasing")
   return False
 
@@ -160,6 +160,17 @@ checkStmt (While loc expr stmt) = do
 
 
 checkStmt (SExp _ expr) = do checkExpr expr; return False
+
+
+checkLValue:: Expr Location -> Location -> TypeMonad TCType
+checkLValue expr loc= do
+  case expr of
+    EVar _ _ -> return()
+    EField _ _ _ -> return ()
+    EIndex _ _ _ -> return ()
+    _ -> throwError (loc, "invalid l-value")
+  checkExpr expr
+
 
 
 checkItem :: TCType -> Item Location -> TypeMonad()
@@ -229,7 +240,7 @@ checkExpr (ERel loc exp1 op exp2) = do
    if isrel then do
      unless (t1 == TCInt) $ throwError (loc, "wrong type")
      unless (t2 == TCInt) $ throwError (loc, "wrong type")
-   
+
    else do
      unless (t1 == t2) $ throwError (loc, "wrong type")
    return TCBool

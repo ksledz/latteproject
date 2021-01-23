@@ -32,10 +32,10 @@ main = do
   args <- getArgs
   text <- readFile $ head $ args
   case pProgram $ myLexer $ text of
-	Bad s -> die ("ERROR\n" ++ s)
-	Ok tree -> do
+        Bad s -> die ("ERROR\n" ++ s)
+        Ok tree -> do
             case checkTypes tree of 
                 Right () -> hPutStrLn stderr "OK"
                 Left s -> die ("ERROR\n" ++ s) 
-		--writeFile (outputName $ head $ args) (allToLLVM tree)
-		--callProcess "llvm-as" [outputName $ head $ args]
+                --writeFile (outputName $ head $ args) (allToLLVM tree)
+                --callProcess "llvm-as" [outputName $ head $ args]

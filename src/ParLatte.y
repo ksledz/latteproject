@@ -17,37 +17,42 @@ import LexLatte
   '&&' { PT _ (TS _ 4) }
   '(' { PT _ (TS _ 5) }
   ')' { PT _ (TS _ 6) }
-  '*' { PT _ (TS _ 7) }
-  '+' { PT _ (TS _ 8) }
-  '++' { PT _ (TS _ 9) }
-  ',' { PT _ (TS _ 10) }
-  '-' { PT _ (TS _ 11) }
-  '--' { PT _ (TS _ 12) }
-  '/' { PT _ (TS _ 13) }
-  ';' { PT _ (TS _ 14) }
-  '<' { PT _ (TS _ 15) }
-  '<=' { PT _ (TS _ 16) }
-  '=' { PT _ (TS _ 17) }
-  '==' { PT _ (TS _ 18) }
-  '>' { PT _ (TS _ 19) }
-  '>=' { PT _ (TS _ 20) }
-  '[' { PT _ (TS _ 21) }
-  '[]' { PT _ (TS _ 22) }
-  ']' { PT _ (TS _ 23) }
-  'boolean' { PT _ (TS _ 24) }
-  'else' { PT _ (TS _ 25) }
-  'false' { PT _ (TS _ 26) }
-  'if' { PT _ (TS _ 27) }
-  'int' { PT _ (TS _ 28) }
-  'new' { PT _ (TS _ 29) }
-  'return' { PT _ (TS _ 30) }
-  'string' { PT _ (TS _ 31) }
-  'true' { PT _ (TS _ 32) }
-  'void' { PT _ (TS _ 33) }
-  'while' { PT _ (TS _ 34) }
-  '{' { PT _ (TS _ 35) }
-  '||' { PT _ (TS _ 36) }
-  '}' { PT _ (TS _ 37) }
+  ')null' { PT _ (TS _ 7) }
+  '*' { PT _ (TS _ 8) }
+  '+' { PT _ (TS _ 9) }
+  '++' { PT _ (TS _ 10) }
+  ',' { PT _ (TS _ 11) }
+  '-' { PT _ (TS _ 12) }
+  '--' { PT _ (TS _ 13) }
+  '.' { PT _ (TS _ 14) }
+  '/' { PT _ (TS _ 15) }
+  ';' { PT _ (TS _ 16) }
+  '<' { PT _ (TS _ 17) }
+  '<=' { PT _ (TS _ 18) }
+  '=' { PT _ (TS _ 19) }
+  '==' { PT _ (TS _ 20) }
+  '>' { PT _ (TS _ 21) }
+  '>=' { PT _ (TS _ 22) }
+  '[' { PT _ (TS _ 23) }
+  '[]' { PT _ (TS _ 24) }
+  ']' { PT _ (TS _ 25) }
+  'boolean' { PT _ (TS _ 26) }
+  'class' { PT _ (TS _ 27) }
+  'else' { PT _ (TS _ 28) }
+  'extends' { PT _ (TS _ 29) }
+  'false' { PT _ (TS _ 30) }
+  'if' { PT _ (TS _ 31) }
+  'int' { PT _ (TS _ 32) }
+  'new' { PT _ (TS _ 33) }
+  'return' { PT _ (TS _ 34) }
+  'self' { PT _ (TS _ 35) }
+  'string' { PT _ (TS _ 36) }
+  'true' { PT _ (TS _ 37) }
+  'void' { PT _ (TS _ 38) }
+  'while' { PT _ (TS _ 39) }
+  '{' { PT _ (TS _ 40) }
+  '||' { PT _ (TS _ 41) }
+  '}' { PT _ (TS _ 42) }
   L_Ident  { PT _ (TV _) }
   L_integ  { PT _ (TI _) }
   L_quoted { PT _ (TL _) }
@@ -68,10 +73,20 @@ Program : ListTopDef { (fst $1, AbsLatte.Program (fst $1) (snd $1)) }
 
 TopDef :: { (Maybe (Int, Int),  (AbsLatte.TopDef (Maybe (Int, Int))) ) }
 TopDef : Type Ident '(' ListArg ')' Block { (fst $1, AbsLatte.FnDef (fst $1) (snd $1) (snd $2) (snd $4) (snd $6)) }
+       | 'class' Ident '{' ListClassItem '}' { (Just (tokenLineCol $1), AbsLatte.ClassDef (Just (tokenLineCol $1)) (snd $2) (snd $4)) }
+       | 'class' Ident 'extends' Ident '{' ListClassItem '}' { (Just (tokenLineCol $1), AbsLatte.ClassEDef (Just (tokenLineCol $1)) (snd $2) (snd $4) (snd $6)) }
+
+ClassItem :: { (Maybe (Int, Int),  (AbsLatte.ClassItem (Maybe (Int, Int))) ) }
+ClassItem : Type Ident ';' { (fst $1, AbsLatte.FieldDef (fst $1) (snd $1) (snd $2)) }
+          | Type Ident '(' ListArg ')' Block { (fst $1, AbsLatte.MethodDef (fst $1) (snd $1) (snd $2) (snd $4) (snd $6)) }
 
 ListTopDef :: { (Maybe (Int, Int),  [AbsLatte.TopDef (Maybe (Int, Int))] ) }
 ListTopDef : TopDef { (fst $1, (:[]) (snd $1)) }
            | TopDef ListTopDef { (fst $1, (:) (snd $1) (snd $2)) }
+
+ListClassItem :: { (Maybe (Int, Int),  [AbsLatte.ClassItem (Maybe (Int, Int))] ) }
+ListClassItem : ClassItem { (fst $1, (:[]) (snd $1)) }
+              | ClassItem ListClassItem { (fst $1, (:) (snd $1) (snd $2)) }
 
 Arg :: { (Maybe (Int, Int),  (AbsLatte.Arg (Maybe (Int, Int))) ) }
 Arg : Type Ident { (fst $1, AbsLatte.Arg (fst $1) (snd $1) (snd $2)) }
@@ -92,9 +107,9 @@ Stmt :: { (Maybe (Int, Int),  (AbsLatte.Stmt (Maybe (Int, Int))) ) }
 Stmt : ';' { (Just (tokenLineCol $1), AbsLatte.Empty (Just (tokenLineCol $1))) }
      | Block { (fst $1, AbsLatte.BStmt (fst $1) (snd $1)) }
      | Type ListItem ';' { (fst $1, AbsLatte.Decl (fst $1) (snd $1) (snd $2)) }
-     | Ident '=' Expr ';' { (fst $1, AbsLatte.Ass (fst $1) (snd $1) (snd $3)) }
-     | Ident '++' ';' { (fst $1, AbsLatte.Incr (fst $1) (snd $1)) }
-     | Ident '--' ';' { (fst $1, AbsLatte.Decr (fst $1) (snd $1)) }
+     | Expr '=' Expr ';' { (fst $1, AbsLatte.Ass (fst $1) (snd $1) (snd $3)) }
+     | Expr '++' ';' { (fst $1, AbsLatte.Incr (fst $1) (snd $1)) }
+     | Expr '--' ';' { (fst $1, AbsLatte.Decr (fst $1) (snd $1)) }
      | 'return' Expr ';' { (Just (tokenLineCol $1), AbsLatte.Ret (Just (tokenLineCol $1)) (snd $2)) }
      | 'return' ';' { (Just (tokenLineCol $1), AbsLatte.VRet (Just (tokenLineCol $1))) }
      | 'if' '(' Expr ')' Stmt { (Just (tokenLineCol $1), AbsLatte.Cond (Just (tokenLineCol $1)) (snd $3) (snd $5)) }
@@ -115,6 +130,7 @@ Type : 'int' { (Just (tokenLineCol $1), AbsLatte.Int (Just (tokenLineCol $1))) }
      | 'string' { (Just (tokenLineCol $1), AbsLatte.Str (Just (tokenLineCol $1))) }
      | 'boolean' { (Just (tokenLineCol $1), AbsLatte.Bool (Just (tokenLineCol $1))) }
      | 'void' { (Just (tokenLineCol $1), AbsLatte.Void (Just (tokenLineCol $1))) }
+     | Ident { (fst $1, AbsLatte.Struct (fst $1) (snd $1)) }
      | Type '[]' { (fst $1, AbsLatte.Arr (fst $1) (snd $1)) }
 
 ListType :: { (Maybe (Int, Int),  [AbsLatte.Type (Maybe (Int, Int))] ) }
@@ -127,13 +143,19 @@ Expr6 : Ident { (fst $1, AbsLatte.EVar (fst $1) (snd $1)) }
       | Integer { (fst $1, AbsLatte.ELitInt (fst $1) (snd $1)) }
       | 'true' { (Just (tokenLineCol $1), AbsLatte.ELitTrue (Just (tokenLineCol $1))) }
       | 'false' { (Just (tokenLineCol $1), AbsLatte.ELitFalse (Just (tokenLineCol $1))) }
+      | 'self' { (Just (tokenLineCol $1), AbsLatte.ESelf (Just (tokenLineCol $1))) }
       | Ident '(' ListExpr ')' { (fst $1, AbsLatte.EApp (fst $1) (snd $1) (snd $3)) }
       | String { (fst $1, AbsLatte.EString (fst $1) (snd $1)) }
       | 'new' Type '[' Expr ']' { (Just (tokenLineCol $1), AbsLatte.EArr (Just (tokenLineCol $1)) (snd $2) (snd $4)) }
+      | Expr6 '.' Ident { (fst $1, AbsLatte.EField (fst $1) (snd $1) (snd $3)) }
+      | Expr6 '.' Ident '(' ListExpr ')' { (fst $1, AbsLatte.EMthdApp (fst $1) (snd $1) (snd $3) (snd $5)) }
+      | Expr6 '[' Expr ']' { (fst $1, AbsLatte.EIndex (fst $1) (snd $1) (snd $3)) }
+      | '(' Type ')null' { (Just (tokenLineCol $1), AbsLatte.ENull (Just (tokenLineCol $1)) (snd $2)) }
       | '(' Expr ')' { (Just (tokenLineCol $1), (snd $2)) }
 
 Expr5 :: { (Maybe (Int, Int),  AbsLatte.Expr (Maybe (Int, Int)) ) }
-Expr5 : '-' Expr6 { (Just (tokenLineCol $1), AbsLatte.Neg (Just (tokenLineCol $1)) (snd $2)) }
+Expr5 : 'new' Ident { (Just (tokenLineCol $1), AbsLatte.EObject (Just (tokenLineCol $1)) (snd $2)) }
+      | '-' Expr6 { (Just (tokenLineCol $1), AbsLatte.Neg (Just (tokenLineCol $1)) (snd $2)) }
       | '!' Expr6 { (Just (tokenLineCol $1), AbsLatte.Not (Just (tokenLineCol $1)) (snd $2)) }
       | Expr6 { (fst $1, (snd $1)) }
 

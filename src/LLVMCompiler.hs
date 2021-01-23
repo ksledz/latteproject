@@ -38,7 +38,7 @@ type LLFuncMap = Map String (LLType, [LLType])
 type LLStringMap = Map String (Int, Int, ByteString)
 type LLVarMap = Map String (LLVal, LLType)
 type LLInstruction = (Int, LLInsn)
-data LLInsn = LLInsnAdd LLVal LLVal | 
+data LLInsn = LLInsnAdd LLVal LLVal |
         LLInsnSub LLVal LLVal |
         LLInsnNeg LLVal |
         LLInsnNot LLVal |
@@ -117,7 +117,7 @@ blockLCA b1 b2 = do
   LLBlock parent1 depth1 _ <- getBlock b1
   LLBlock parent2 depth2 _ <- getBlock b2
   if b1 == b2 then return b1 else
-    if depth2 > depth1 
+    if depth2 > depth1
       then blockLCA parent2 b1
       else if depth1 > depth2
         then blockLCA parent1 b2
@@ -304,7 +304,7 @@ translateWhile expr stmt phiVars = do
   translateExprAsCond expr (okBlock, Map.empty) (exitBlock, Map.empty)
   setCurrent $ LLCurrentBlock okBlock loopVars
   translateStmt stmt
-  after <- getCurrent 
+  after <- getCurrent
   case after of
     LLCurrentNone -> setCurrent $ LLCurrentBlock exitBlock loopVars
     LLCurrentBlock afterBlock afterVars -> do
@@ -505,18 +505,18 @@ translateStmt (BStmt _ b) = translateBlock b
 translateStmt (Decl _ t i) = do
   mapM_ (translateItem $ convertType t) i
 
-translateStmt (Ass _ ident expr) = do
+translateStmt (Ass _ (EVar _ ident) expr) = do
   let Ident s = ident 
   val <- translateExpr expr 
   setVar s val
 
-translateStmt (Incr _ ident) = do
+translateStmt (Incr _ (EVar _ ident)) = do
   let Ident s = ident
   (val, typ) <- getVar s 
   nval <- translateSimpleExpr(LLInsnAdd val (LLConstInt 1))
   setVar s (nval, LLInt)
 
-translateStmt (Decr _ ident) = do
+translateStmt (Decr _ (EVar _ ident)) = do
   let Ident s = ident
   (val, typ) <- getVar s 
   nval <- translateSimpleExpr(LLInsnAdd val (LLConstInt (-1)))
