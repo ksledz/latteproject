@@ -221,7 +221,7 @@ checkStmt (Decl _ t i) = do
   mapM_ (checkItem tt) i
   return False
 checkStmt (Ass loc lval expr) = do
-  t <- checkExpr expr
+  t <- checkRValue expr
   ti <- checkLValue lval loc
   checkCovariantTypes loc ti t
   return False
@@ -237,7 +237,7 @@ checkStmt (Decr loc lval) = do
   return False
 
 checkStmt (Ret loc expr) = do
-  t <- checkExpr expr
+  t <- checkRValue expr
   tret <- asks getReturnType
   checkCovariantTypes loc tret t
   return True
@@ -248,7 +248,7 @@ checkStmt (VRet loc) = do
   return True
 
 checkStmt (Cond loc expr stmt) = do
-  t <- checkExpr expr
+  t <- checkRValue expr
   unless (t == TCBool) $ throwError (loc, "wrong type of logic condition")
   res <- checkStmt stmt
   case expr of 
@@ -256,7 +256,7 @@ checkStmt (Cond loc expr stmt) = do
     _ -> return False
 
 checkStmt (CondElse loc expr stmt1 stmt2) = do
-  t <- checkExpr expr
+  t <- checkRValue expr
   unless (t == TCBool) $ throwError (loc, "wrong type of logic condition")
   res1 <- checkStmt stmt1
   res2 <- checkStmt stmt2
@@ -266,7 +266,7 @@ checkStmt (CondElse loc expr stmt1 stmt2) = do
     _ -> return (res1 && res2)
 
 checkStmt (While loc expr stmt) = do
-  t <- checkExpr expr
+  t <- checkRValue expr
   unless (t == TCBool) $ throwError (loc, "wrong type of logic condition")
   res <- checkStmt stmt
   case expr of
@@ -275,142 +275,145 @@ checkStmt (While loc expr stmt) = do
 
 checkStmt (For loc t ident expr stmt) = do
   t1 <- checkType False t
-  t2 <- checkExpr expr
+  t2 <- checkRValue expr
   unless (t2 == TCArray t1) $ throwError (loc, "wrong type of loop variable")
   local (transformSymbols (Map.insert ident t1) ) $ checkStmt stmt
 
 
 
-checkStmt (SExp _ expr) = do checkExpr expr; return False
+checkStmt (SExp _ expr) = do checkRValue expr; return False
 
 
 checkLValue:: Expr Location -> Location -> TypeMonad TCType
 checkLValue expr loc= do
-  case expr of
-    EVar _ _ -> return()
-    EField _ _ _ -> return ()
-    EIndex _ _ _ -> return ()
-    _ -> throwError (loc, "invalid l-value")
-  checkExpr expr
+  (t, ok) <- checkExpr expr
+  unless ok $ throwError (loc, "invalid l-value")
+  return t
 
+checkRValue:: Expr Location -> TypeMonad TCType
+checkRValue expr = do
+  (t, ok) <- checkExpr expr
+  return t
 
 
 checkItem :: TCType -> Item Location -> TypeMonad()
 checkItem t (NoInit _ i ) =  return ()
 checkItem t (Init loc ident expr) = do
-  t1 <- checkExpr expr
+  t1 <- checkRValue expr
   checkCovariantTypes loc t t1
 
 isFunctional :: TCType -> Bool
 isFunctional (TCFun _ _) = True
 isFunctional _ = False
 
-checkExpr :: Expr Location -> TypeMonad TCType
-checkExpr (EVar loc ident) = getType ident loc
-checkExpr (ELitInt _ integer) = return TCInt
-checkExpr (ELitTrue _) = return TCBool
-checkExpr (ELitFalse _) = return TCBool
+checkExpr :: Expr Location -> TypeMonad (TCType, Bool)
+checkExpr (EVar loc ident) = do
+  t <- getType ident loc
+  return (t, True)
+checkExpr (ELitInt _ integer) = return (TCInt, False)
+checkExpr (ELitTrue _) = return (TCBool, False)
+checkExpr (ELitFalse _) = return (TCBool, False)
 checkExpr (EArr loc t expr) = do
   t1 <- checkType False t
-  t2 <- checkExpr expr
+  t2 <- checkRValue expr
   unless (t2 == TCInt) $ throwError (loc, "wrong array length type")
-  return $ TCArray t1
+  return (TCArray t1, False)
 
 checkExpr (EIndex loc e1 e2) = do
-  t1 <- checkExpr e1
-  t2 <- checkExpr e2
+  t1 <- checkRValue e1
+  t2 <- checkRValue e2
   unless (t2 == TCInt) $ throwError (loc, "wrong array index type")
   case t1 of
-    TCArray t -> return t
+    TCArray t -> return (t, True)
     _ -> throwError (loc, "sweet jesus, pooh! that's not an array-able type")
 
 checkExpr (EField loc expr ident) = do
-  t1 <- checkExpr expr
+  t1 <- checkRValue expr
   let Ident s = ident
   case t1 of
     TCArray _ -> do
-      if (s == "length") then return TCInt else throwError (loc, "array doesnt have such a field")
+      if (s == "length") then return (TCInt, False) else throwError (loc, "array doesnt have such a field")
     TCObject i -> do
       (_, sd) <- getStruct loc i
       case Map.lookup ident sd of
         Nothing -> throwError (loc, "unknown field")
-        Just t -> return t
+        Just t -> return (t, True)
     _ -> throwError (loc, "this doesn't have fields")
 
 checkExpr (EObject loc ident) = do
   getStruct loc ident
-  return $ TCObject ident
+  return (TCObject ident, False)
 
 checkExpr (ENull loc e) = do
   case e of
-    EVar _ i -> return $ TCObject i
+    EVar _ i -> return (TCObject i, False)
     _ -> throwError (loc, "invalid null cast")
 
 checkExpr (EApp loc ident exprs) = do
   t <- getType ident loc
-  types <- mapM checkExpr exprs
+  types <- mapM checkRValue exprs
   unless (isFunctional t) $ throwError (loc, "wrong type: not a function")
   let TCFun retT argTs = t
   mapM_ (uncurry (checkCovariantTypes loc)) (zip argTs types)
-  return retT
+  return (retT, False)
 
 checkExpr (EMthdApp loc expr ident exprs) = do
-  t1 <- checkExpr expr
+  t1 <- checkRValue expr
   case t1 of
     TCObject i -> do
       (_, sd) <- getStruct loc i
       case Map.lookup ident sd of
         Nothing -> throwError (loc, "unknown method")
         Just t -> do
-          types <- mapM checkExpr exprs
+          types <- mapM checkRValue exprs
           unless (isFunctional t) $ throwError (loc, "wrong type: not a method")
           let TCFun retT argTs = t
           mapM_ (uncurry (checkCovariantTypes loc)) (zip argTs types)
-          return retT
+          return (retT, False)
     _ -> throwError (loc, "this doesn't have methods")
 
 checkExpr (ESelf loc) = do
   cs <- asks getCurrentStruct
   case cs of
     Nothing -> throwError (loc, "self used outside of method")
-    Just i -> return $ TCObject i
+    Just i -> return (TCObject i, False)
 
-checkExpr (EString _ string) = return TCStr
+checkExpr (EString _ string) = return (TCStr, False)
 checkExpr (Neg loc expr) = do
-  t <- checkExpr expr
+  t <- checkRValue expr
   unless (t == TCInt) $ throwError (loc, "wrong negation type")
-  return TCInt
+  return (TCInt, False)
 checkExpr (Not loc expr) = do
-  t <- checkExpr expr
+  t <- checkRValue expr
   unless (t == TCBool ) $ throwError (loc, "wrong logic negation type")
-  return TCBool
+  return (TCBool, False)
 
 checkExpr (EMul loc exp1 _ exp2) = do
-  t1 <- checkExpr exp1
-  t2 <- checkExpr exp2
+  t1 <- checkRValue exp1
+  t2 <- checkRValue exp2
   unless (t1 == TCInt) $ throwError (loc, "wrong type of argument 1 for multiplying")
   unless (t2 == TCInt) $ throwError (loc, "wrong type of argument 2 for multiplying")
-  return TCInt
+  return (TCInt, False)
 
 
 checkExpr (EAdd loc exp1 (Plus loc2) exp2) = do
-  t1 <- checkExpr exp1
-  t2 <- checkExpr exp2
+  t1 <- checkRValue exp1
+  t2 <- checkRValue exp2
   unless (t1 == TCInt || t1 == TCStr) $ throwError (loc, "wrong type")
   unless (t2 == TCInt || t2 == TCStr) $ throwError (loc, "wrong type")
   unless (t1 == t2) $ throwError (loc, "wrong type")
-  return t1
+  return (t1, False)
 
 checkExpr (EAdd loc exp1 _ exp2) = do
-  t1 <- checkExpr exp1
-  t2 <- checkExpr exp2
+  t1 <- checkRValue exp1
+  t2 <- checkRValue exp2
   unless (t1 == TCInt) $ throwError (loc, "wrong type")
   unless (t2 == TCInt) $ throwError (loc, "wrong type")
-  return TCInt
+  return (TCInt, False)
 
 checkExpr (ERel loc exp1 op exp2) = do
-   t1 <- checkExpr exp1
-   t2 <- checkExpr exp2
+   t1 <- checkRValue exp1
+   t2 <- checkRValue exp2
    let isrel = case op of LTH _ -> True
                           LE _ -> True
                           GTH _ -> True
@@ -422,19 +425,19 @@ checkExpr (ERel loc exp1 op exp2) = do
 
    else do
      unless (t1 == t2) $ throwError (loc, "wrong type")
-   return TCBool
+   return (TCBool, False)
 
 checkExpr (EAnd loc exp1 exp2) = do
-  t1 <- checkExpr exp1
-  t2 <- checkExpr exp2
+  t1 <- checkRValue exp1
+  t2 <- checkRValue exp2
   unless (t1 == TCBool) $ throwError (loc, "wrong type")
   unless (t2 == TCBool) $ throwError (loc, "wrong type")
-  return TCBool
+  return (TCBool, False)
 
 checkExpr (EOr loc exp1 exp2) = do
-  t1 <- checkExpr exp1
-  t2 <- checkExpr exp2
+  t1 <- checkRValue exp1
+  t2 <- checkRValue exp2
   unless (t1 == TCBool) $ throwError (loc, "wrong type")
   unless (t2 == TCBool) $ throwError (loc, "wrong type")
-  return TCBool
+  return (TCBool, False)
 
