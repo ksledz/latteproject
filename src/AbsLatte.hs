@@ -128,7 +128,7 @@ data Expr a
     | EMthdApp a (Expr a) Ident [Expr a]
     | EIndex a (Expr a) (Expr a)
     | EObject a Ident
-    | ENull a (Type a)
+    | ENull a (Expr a)
     | Neg a (Expr a)
     | Not a (Expr a)
     | EMul a (Expr a) (MulOp a) (Expr a)
@@ -152,7 +152,7 @@ instance C.Functor Expr where
         EMthdApp a expr ident exprs -> EMthdApp (f a) (fmap f expr) ident (map (fmap f) exprs)
         EIndex a expr1 expr2 -> EIndex (f a) (fmap f expr1) (fmap f expr2)
         EObject a ident -> EObject (f a) ident
-        ENull a type_ -> ENull (f a) (fmap f type_)
+        ENull a expr -> ENull (f a) (fmap f expr)
         Neg a expr -> Neg (f a) (fmap f expr)
         Not a expr -> Not (f a) (fmap f expr)
         EMul a expr1 mulop expr2 -> EMul (f a) (fmap f expr1) (fmap f mulop) (fmap f expr2)

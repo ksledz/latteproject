@@ -200,7 +200,7 @@ instance Print (AbsLatte.Expr a) where
     AbsLatte.EMthdApp _ expr id exprs -> prPrec i 6 (concatD [prt 6 expr, doc (showString "."), prt 0 id, doc (showString "("), prt 0 exprs, doc (showString ")")])
     AbsLatte.EIndex _ expr1 expr2 -> prPrec i 6 (concatD [prt 6 expr1, doc (showString "["), prt 0 expr2, doc (showString "]")])
     AbsLatte.EObject _ id -> prPrec i 5 (concatD [doc (showString "new"), prt 0 id])
-    AbsLatte.ENull _ type_ -> prPrec i 6 (concatD [doc (showString "("), prt 0 type_, doc (showString ")null")])
+    AbsLatte.ENull _ expr -> prPrec i 6 (concatD [doc (showString "("), prt 0 expr, doc (showString ")"), doc (showString "null")])
     AbsLatte.Neg _ expr -> prPrec i 5 (concatD [doc (showString "-"), prt 6 expr])
     AbsLatte.Not _ expr -> prPrec i 5 (concatD [doc (showString "!"), prt 6 expr])
     AbsLatte.EMul _ expr1 mulop expr2 -> prPrec i 4 (concatD [prt 4 expr1, prt 0 mulop, prt 5 expr2])

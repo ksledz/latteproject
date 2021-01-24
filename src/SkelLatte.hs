@@ -73,7 +73,7 @@ transExpr x = case x of
   AbsLatte.EMthdApp _ expr ident exprs -> failure x
   AbsLatte.EIndex _ expr1 expr2 -> failure x
   AbsLatte.EObject _ ident -> failure x
-  AbsLatte.ENull _ type_ -> failure x
+  AbsLatte.ENull _ expr -> failure x
   AbsLatte.Neg _ expr -> failure x
   AbsLatte.Not _ expr -> failure x
   AbsLatte.EMul _ expr1 mulop expr2 -> failure x

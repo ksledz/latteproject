@@ -17,35 +17,35 @@ import LexLatte
   '&&' { PT _ (TS _ 4) }
   '(' { PT _ (TS _ 5) }
   ')' { PT _ (TS _ 6) }
-  ')null' { PT _ (TS _ 7) }
-  '*' { PT _ (TS _ 8) }
-  '+' { PT _ (TS _ 9) }
-  '++' { PT _ (TS _ 10) }
-  ',' { PT _ (TS _ 11) }
-  '-' { PT _ (TS _ 12) }
-  '--' { PT _ (TS _ 13) }
-  '.' { PT _ (TS _ 14) }
-  '/' { PT _ (TS _ 15) }
-  ':' { PT _ (TS _ 16) }
-  ';' { PT _ (TS _ 17) }
-  '<' { PT _ (TS _ 18) }
-  '<=' { PT _ (TS _ 19) }
-  '=' { PT _ (TS _ 20) }
-  '==' { PT _ (TS _ 21) }
-  '>' { PT _ (TS _ 22) }
-  '>=' { PT _ (TS _ 23) }
-  '[' { PT _ (TS _ 24) }
-  '[]' { PT _ (TS _ 25) }
-  ']' { PT _ (TS _ 26) }
-  'boolean' { PT _ (TS _ 27) }
-  'class' { PT _ (TS _ 28) }
-  'else' { PT _ (TS _ 29) }
-  'extends' { PT _ (TS _ 30) }
-  'false' { PT _ (TS _ 31) }
-  'for' { PT _ (TS _ 32) }
-  'if' { PT _ (TS _ 33) }
-  'int' { PT _ (TS _ 34) }
-  'new' { PT _ (TS _ 35) }
+  '*' { PT _ (TS _ 7) }
+  '+' { PT _ (TS _ 8) }
+  '++' { PT _ (TS _ 9) }
+  ',' { PT _ (TS _ 10) }
+  '-' { PT _ (TS _ 11) }
+  '--' { PT _ (TS _ 12) }
+  '.' { PT _ (TS _ 13) }
+  '/' { PT _ (TS _ 14) }
+  ':' { PT _ (TS _ 15) }
+  ';' { PT _ (TS _ 16) }
+  '<' { PT _ (TS _ 17) }
+  '<=' { PT _ (TS _ 18) }
+  '=' { PT _ (TS _ 19) }
+  '==' { PT _ (TS _ 20) }
+  '>' { PT _ (TS _ 21) }
+  '>=' { PT _ (TS _ 22) }
+  '[' { PT _ (TS _ 23) }
+  '[]' { PT _ (TS _ 24) }
+  ']' { PT _ (TS _ 25) }
+  'boolean' { PT _ (TS _ 26) }
+  'class' { PT _ (TS _ 27) }
+  'else' { PT _ (TS _ 28) }
+  'extends' { PT _ (TS _ 29) }
+  'false' { PT _ (TS _ 30) }
+  'for' { PT _ (TS _ 31) }
+  'if' { PT _ (TS _ 32) }
+  'int' { PT _ (TS _ 33) }
+  'new' { PT _ (TS _ 34) }
+  'null' { PT _ (TS _ 35) }
   'return' { PT _ (TS _ 36) }
   'self' { PT _ (TS _ 37) }
   'string' { PT _ (TS _ 38) }
@@ -153,7 +153,7 @@ Expr6 : Ident { (fst $1, AbsLatte.EVar (fst $1) (snd $1)) }
       | Expr6 '.' Ident { (fst $1, AbsLatte.EField (fst $1) (snd $1) (snd $3)) }
       | Expr6 '.' Ident '(' ListExpr ')' { (fst $1, AbsLatte.EMthdApp (fst $1) (snd $1) (snd $3) (snd $5)) }
       | Expr6 '[' Expr ']' { (fst $1, AbsLatte.EIndex (fst $1) (snd $1) (snd $3)) }
-      | '(' Type ')null' { (Just (tokenLineCol $1), AbsLatte.ENull (Just (tokenLineCol $1)) (snd $2)) }
+      | '(' Expr ')' 'null' { (Just (tokenLineCol $1), AbsLatte.ENull (Just (tokenLineCol $1)) (snd $2)) }
       | '(' Expr ')' { (Just (tokenLineCol $1), (snd $2)) }
 
 Expr5 :: { (Maybe (Int, Int),  AbsLatte.Expr (Maybe (Int, Int)) ) }

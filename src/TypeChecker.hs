@@ -341,8 +341,10 @@ checkExpr (EObject loc ident) = do
   getStruct loc ident
   return $ TCObject ident
 
-checkExpr (ENull loc t) = do
-  checkType False t
+checkExpr (ENull loc e) = do
+  case e of
+    EVar _ i -> return $ TCObject i
+    _ -> throwError (loc, "invalid null cast")
 
 checkExpr (EApp loc ident exprs) = do
   t <- getType ident loc

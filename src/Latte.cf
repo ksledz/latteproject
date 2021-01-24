@@ -104,7 +104,7 @@ EIndex.    Expr6 ::= Expr6 "[" Expr "]";
 
 EObject.   Expr5 ::= "new" Ident; 
 
-ENull.     Expr6 ::= "(" Type ")null";
+ENull.     Expr6 ::= "(" Expr ")" "null";
 
 Neg.       Expr5 ::= "-" Expr6 ;
 
