@@ -202,6 +202,23 @@ setVarsUndo m = do
   put (LLState a b c m d e f g h i)
   return ()
 
+pushVarsUndo :: LLMonad LLVarsUndo
+pushVarsUndo = do
+  res <- getVarsUndo
+  setVarsUndo Map.empty
+  return res
+
+popVarsUndo :: LLVarsUndo -> LLMonad ()
+popVarsUndo orig = do
+  cur <- getCurrent
+  undo <- getVarsUndo
+  setVarsUndo orig
+  case cur of
+    LLCurrentNone -> return ()
+    LLCurrentBlock block vars -> do
+      let finalVars = Map.foldrWithKey undoVar vars undo
+      setCurrent $ LLCurrentBlock block finalVars
+
 setVar :: String -> (LLVal, LLType) -> LLMonad ()
 setVar s p = do
   state <- get
@@ -381,6 +398,53 @@ translateWhile expr stmt phiVars = do
       else do
         put state
         translateWhile expr stmt (Set.union phiVars actualPhiVars)
+
+translateFor :: LLType -> String -> LLVal -> LLType -> LLVal -> (Stmt Location) -> (Set String) -> LLMonad ()
+translateFor tv sv va te vl stmt phiVars = do
+  state <- get
+  cur <- getCurrent
+  let LLCurrentBlock curBlock curVars = cur
+  loopBlock <- startBlock curBlock
+  loopVars <- foldM (translateLoopPhi loopBlock) curVars phiVars
+  ctr <- translateInsnToBlock loopBlock (LLInsnPhi LLInt)
+  let LLReg ctridx = ctr
+  let curPhis = makePhis loopVars phiVars curVars
+  endBlock $ LLJoin (loopBlock, Map.insert ctridx (LLConstInt 0) curPhis)
+  setCurrent $ LLCurrentBlock loopBlock loopVars
+  okBlock <- startBlock loopBlock
+  exitBlock <- startBlock loopBlock
+  cmp <- translateSimpleExpr (LLInsnLt ctr vl)
+  endBlock (LLCond cmp (okBlock, Map.empty) (exitBlock, Map.empty))
+  setCurrent $ LLCurrentBlock okBlock loopVars
+  ve <- translateInsn (LLInsnArrayLoad te va ctr)
+  undo <- pushVarsUndo
+  declVar tv sv (ve, te)
+  translateStmt stmt
+  popVarsUndo undo
+  after <- getCurrent
+  case after of
+    LLCurrentNone -> do
+      setCurrent $ LLCurrentBlock exitBlock loopVars
+    LLCurrentBlock afterBlock afterVars -> do
+      let actualPhiVars = Set.fromList $ map (\(a, _, _, _) -> a) (findPhis afterVars curVars)
+      if Set.isSubsetOf actualPhiVars phiVars then do
+        let afterPhis = makePhis loopVars phiVars afterVars
+        nctr <- translateSimpleExpr (LLInsnAdd ctr (LLConstInt 1))
+        endBlock $ LLJoin (loopBlock, Map.insert ctridx nctr afterPhis)
+        setCurrent $ LLCurrentBlock exitBlock loopVars
+      else do
+        put state
+        translateFor tv sv va te vl stmt (Set.union phiVars actualPhiVars)
+
+-- for (chuj dupa: dupy) miecho
+--
+-- ndupy = dupy.length
+-- i = 0;
+-- while (i < ndupy) {
+--   chuj dupa = dupy[i];
+--   miecho;
+--   i++;
+-- }
 
 translateCast :: LLType -> (LLVal, LLType) -> LLMonad LLVal
 translateCast t1 (v2, t2) =
@@ -776,7 +840,14 @@ translateStmt (CondElse _ expr stmt1 stmt2) = do
           setCurrent cond2
           endBlock (LLJoin (joinBlock, condPhis2))
           setCurrent(LLCurrentBlock joinBlock joinVars)
+
 translateStmt (While _ expr stmt) = translateWhile expr stmt Set.empty
+
+translateStmt (For _ t (Ident s) expr stmt) = do
+  (v1, t1) <- translateExpr expr
+  let LLArray te = t1
+  v2 <- translateInsn (LLInsnArrayLength te v1)
+  translateFor (convertType t) s v1 te v2 stmt Set.empty
 
 translateStmt (Ret _ expr) = do
   (v1, t1) <- translateExpr expr
@@ -790,18 +861,9 @@ translateBlockStmt s = do
   if cur == LLCurrentNone then return () else translateStmt s
 
 translateBlock (Block _ stmts) = do
-  cur <- getCurrent 
-  startVarsUndo <- getVarsUndo
-  setVarsUndo Map.empty
+  undo <- pushVarsUndo
   mapM_ translateBlockStmt stmts
-  after <- getCurrent
-  endVarsUndo <- getVarsUndo
-  setVarsUndo startVarsUndo
-  case after of
-    LLCurrentNone -> return ()
-    LLCurrentBlock endBlock endVars -> do
-      let finalVars = Map.foldrWithKey undoVar endVars endVarsUndo
-      setCurrent $ LLCurrentBlock endBlock finalVars
+  popVarsUndo undo
 
 translateTopBlock :: Block Location -> LLMonad()
 translateTopBlock block = do
