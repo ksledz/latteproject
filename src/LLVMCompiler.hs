@@ -31,7 +31,6 @@ import qualified AbsLatte as Latte
 import ErrM
 
 type Location = Maybe (Int, Int)
--- lol
 data LLState = LLState (Map Int LLInstruction) (Map Int LLBlock) LLCurrent LLVarsUndo LLFuncMap LLStringMap (Map LLInsn Int) LLStructMap (Maybe String) LLType
 type LLVarsUndo = Map String (Maybe (LLVal, LLType))
 type LLFuncMap = Map String (LLType, [LLType])
@@ -435,16 +434,6 @@ translateFor tv sv va te vl stmt phiVars = do
       else do
         put state
         translateFor tv sv va te vl stmt (Set.union phiVars actualPhiVars)
-
--- for (chuj dupa: dupy) miecho
---
--- ndupy = dupy.length
--- i = 0;
--- while (i < ndupy) {
---   chuj dupa = dupy[i];
---   miecho;
---   i++;
--- }
 
 translateCast :: LLType -> (LLVal, LLType) -> LLMonad LLVal
 translateCast t1 (v2, t2) =
