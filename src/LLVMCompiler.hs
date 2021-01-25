@@ -56,14 +56,17 @@ data LLInsn = LLInsnAdd LLVal LLVal |
         LLInsnGe  LLVal LLVal |
         LLInsnCat LLVal LLVal |
         LLInsnCall String [(LLVal, LLType)] LLType |
-        LLInsnArrayLoad LLType LLVal LLVal |
-        LLInsnArrayStore LLType LLVal LLVal LLVal |
+        LLInsnLoad LLType LLVal |
+        LLInsnStore LLType LLVal LLVal |
+        LLInsnArrayGEP LLType LLVal LLVal |
         LLInsnArrayNew LLType LLVal |
         LLInsnArrayLength LLType LLVal |
-        LLInsnObjectNew String |
-        LLInsnObjectLoad String LLType LLVal Int |
-        LLInsnObjectStore String LLType LLVal Int LLVal |
-        LLInsnObjectCall String LLVal Int [(LLVal, LLType)] LLType |
+        LLInsnObjectSize String |
+        LLInsnObjectNew String LLVal |
+        LLInsnObjectGEP String LLType LLVal Int |
+        LLInsnGetVTable String LLVal |
+        LLInsnGetVMthd String LLVal Int [LLType] LLType |
+        LLInsnVCall LLVal [(LLVal, LLType)] LLType |
         LLInsnObjectCast LLType LLType LLVal |
         LLInsnPhi LLType deriving (Eq, Ord, Show)
 
@@ -121,7 +124,8 @@ getVar a = do
       let Just sn = st
       (fm, _, _, _) <- getStructDef sn
       let (idx, t) = fm Map.! a
-      v <- translateInsn (LLInsnObjectLoad sn t LLSelf idx)
+      vp <- translateSimpleExpr (LLInsnObjectGEP sn t LLSelf idx)
+      v <- translateInsn (LLInsnLoad t vp)
       return (v, t)
 
 getFunc :: String -> LLMonad (Maybe (LLType, [LLType]))
@@ -178,6 +182,12 @@ translateInsn insn = do
   cur <- getCurrent
   let LLCurrentBlock block _ = cur
   translateInsnToBlock block insn
+
+translateObjectCall :: String -> LLVal -> Int -> [(LLVal, LLType)] -> LLType -> LLMonad LLVal
+translateObjectCall sn v idx args rt = do
+  vt <- translateSimpleExpr (LLInsnGetVTable sn v)
+  vte <- translateSimpleExpr (LLInsnGetVMthd sn vt idx (map snd args) rt)
+  translateInsn (LLInsnVCall vte args rt)
 
 addLocalVar :: String -> LLMonad ()
 addLocalVar v = do
@@ -236,7 +246,8 @@ setVar s p = do
       (fm, _, _, _) <- getStructDef sn
       let (idx, t) = fm Map.! s
       v <- translateCast t p
-      translateInsn (LLInsnObjectStore sn t LLSelf idx v)
+      vp <- translateSimpleExpr (LLInsnObjectGEP sn t LLSelf idx)
+      translateInsn (LLInsnStore t vp v)
       return ()
 
 declVar :: LLType -> String -> (LLVal, LLType) -> LLMonad ()
@@ -415,7 +426,8 @@ translateFor tv sv va te vl stmt phiVars = do
   cmp <- translateSimpleExpr (LLInsnLt ctr vl)
   endBlock (LLCond cmp (okBlock, Map.empty) (exitBlock, Map.empty))
   setCurrent $ LLCurrentBlock okBlock loopVars
-  ve <- translateInsn (LLInsnArrayLoad te va ctr)
+  vep <- translateSimpleExpr (LLInsnArrayGEP te va ctr)
+  ve <- translateInsn (LLInsnLoad te vep)
   undo <- pushVarsUndo
   declVar tv sv (ve, te)
   translateStmt stmt
@@ -434,6 +446,13 @@ translateFor tv sv va te vl stmt phiVars = do
       else do
         put state
         translateFor tv sv va te vl stmt (Set.union phiVars actualPhiVars)
+
+translateInitField :: String -> LLVal -> (Int, LLType) -> LLMonad ()
+translateInitField sn v (idx, t) = do
+  vp <- translateSimpleExpr (LLInsnObjectGEP sn t v idx)
+  vi <- initialValue t
+  translateInsn (LLInsnStore t vp vi)
+  return ()
 
 translateCast :: LLType -> (LLVal, LLType) -> LLMonad LLVal
 translateCast t1 (v2, t2) =
@@ -620,7 +639,7 @@ translateExpr (EApp _ (Ident s) exprs) = do
       let (idx, rt, at, bsn) = mm Map.! s
       cv1 <- translateCast (LLObject bsn) (LLSelf, LLObject sn)
       cargs <- convertArgs args at
-      v <- translateInsn (LLInsnObjectCall sn LLSelf idx ((cv1, LLObject bsn):cargs) rt)
+      v <- translateObjectCall sn LLSelf idx ((cv1, LLObject bsn):cargs) rt
       return (v, rt)
 
 translateExpr (ESelf _) = do
@@ -635,7 +654,8 @@ translateExpr (EIndex _ e1 e2) = do
   (v1, t1) <- translateExpr e1
   (v2, _) <- translateExpr e2 -- type is checked
   let LLArray t = t1
-  v <- translateInsn (LLInsnArrayLoad t v1 v2)
+  vp <- translateSimpleExpr (LLInsnArrayGEP t v1 v2)
+  v <- translateInsn (LLInsnLoad t vp)
   return (v, t)
 
 translateExpr (EArr _ t1 e1) = do
@@ -648,17 +668,21 @@ translateExpr (EField _ e1 (Ident s)) = do
   (v1, t1) <- translateExpr e1
   case t1 of
     LLArray t -> do
-      v <- translateInsn (LLInsnArrayLength t v1)
+      v <- translateSimpleExpr (LLInsnArrayLength t v1)
       return (v, LLInt)
     LLObject sn -> do
       (fm, _, _, _) <- getStructDef sn
       let (idx, t) = fm Map.! s
-      v <- translateInsn (LLInsnObjectLoad sn t v1 idx)
+      vp <- translateSimpleExpr (LLInsnObjectGEP sn t v1 idx)
+      v <- translateInsn (LLInsnLoad t vp)
       return (v, t)
 
 translateExpr (EObject _ (Ident s)) = do
-  v <- translateInsn (LLInsnObjectNew s)
-  -- TODO default vals
+  vs <- translateSimpleExpr (LLInsnObjectSize s)
+  v <- translateInsn (LLInsnObjectNew s vs)
+  (_, _, fieldMap, _) <- getStructDef s
+  let fields = Map.toAscList fieldMap
+  mapM_ (translateInitField s v) fields
   return (v, LLObject s)
 
 translateExpr (EMthdApp _ e1 (Ident s) exprs) = do
@@ -669,22 +693,14 @@ translateExpr (EMthdApp _ e1 (Ident s) exprs) = do
   let (idx, rt, at, bsn) = mm Map.! s
   cv1 <- translateCast (LLObject bsn) (v1, t1)
   cargs <- convertArgs args at
-  v <- translateInsn (LLInsnObjectCall sn v1 idx ((cv1, LLObject bsn):cargs) rt)
+  v <- translateObjectCall sn v1 idx ((cv1, LLObject bsn):cargs) rt
   return (v, rt)
 
-translateItem t (NoInit _ ident) = do
-  let Ident s = ident 
-  case t of
-    LLInt -> declVar t s (LLConstInt 0, LLInt)
-    LLBool -> declVar t s (LLConstBool False, LLBool)
-    LLStr -> do
-      val <- translateString ""
-      declVar t s (val, LLStr)
-    LLArray _ -> declVar t s (LLNull, t)
-    LLObject _ -> declVar t s (LLNull, t)
+translateItem t (NoInit _ (Ident s)) = do
+  val <- initialValue t
+  declVar t s (val, t)
 
-translateItem t (Init _ ident expr) = do
-  let Ident s = ident
+translateItem t (Init _ (Ident s) expr) = do
   val <- translateExpr expr
   declVar t s val
 
@@ -706,7 +722,8 @@ translateStmt (Ass _ (EIndex _ e1 e2 ) e3) = do
   (v3, t3) <- translateExpr e3
   let LLArray t = t1
   v4 <- translateCast t (v3, t3)
-  translateInsn(LLInsnArrayStore t v1 v2 v4)
+  vp <- translateSimpleExpr (LLInsnArrayGEP t v1 v2)
+  translateInsn(LLInsnStore t vp v4)
   return()
 
 translateStmt (Ass _ (EField _ e1 (Ident s)) e2) = do
@@ -716,7 +733,8 @@ translateStmt (Ass _ (EField _ e1 (Ident s)) e2) = do
   (fm, _, _, _) <- getStructDef sn
   let (idx, t) = fm Map.! s
   v3 <- translateCast t (v2, t2)
-  translateInsn(LLInsnObjectStore sn t v1 idx v3)
+  vp <- translateSimpleExpr (LLInsnObjectGEP sn t v1 idx)
+  translateInsn (LLInsnStore t vp v3)
   return()
 
 translateStmt (Incr _ (EVar _ ident)) = do
@@ -729,9 +747,10 @@ translateStmt (Incr _ (EIndex _ e1 e2)) = do
   (v1, t1) <- translateExpr e1
   (v2, _) <- translateExpr e2
   let LLArray t = t1
-  v3 <- translateInsn(LLInsnArrayLoad t v1 v2)
+  vp <- translateSimpleExpr (LLInsnArrayGEP t v1 v2)
+  v3 <- translateInsn(LLInsnLoad t vp)
   nval <- translateSimpleExpr(LLInsnAdd v3 (LLConstInt 1))
-  translateInsn(LLInsnArrayStore t v1 v2 nval)
+  translateInsn(LLInsnStore t vp nval)
   return()
 
 translateStmt (Incr _ (EField _ e1 (Ident s))) = do
@@ -739,9 +758,10 @@ translateStmt (Incr _ (EField _ e1 (Ident s))) = do
   let LLObject sn = t1
   (fm, _, _, _) <- getStructDef sn
   let (idx, t) = fm Map.! s
-  v2 <- translateInsn(LLInsnObjectLoad sn t v1 idx)
+  vp <- translateSimpleExpr (LLInsnObjectGEP sn t v1 idx)
+  v2 <- translateInsn (LLInsnLoad t vp)
   nval <- translateSimpleExpr(LLInsnAdd v2 (LLConstInt 1))
-  translateInsn(LLInsnObjectStore sn t v1 idx nval)
+  translateInsn(LLInsnStore t vp nval)
   return()
 
 translateStmt (Decr _ (EVar _ ident)) = do
@@ -754,9 +774,10 @@ translateStmt (Decr _ (EIndex _ e1 e2)) = do
   (v1, t1) <- translateExpr e1
   (v2, _) <- translateExpr e2
   let LLArray t = t1
-  v3 <- translateInsn(LLInsnArrayLoad t v1 v2)
+  vp <- translateSimpleExpr (LLInsnArrayGEP t v1 v2)
+  v3 <- translateInsn(LLInsnLoad t vp)
   nval <- translateSimpleExpr(LLInsnAdd v3 (LLConstInt (-1)))
-  translateInsn(LLInsnArrayStore t v1 v2 nval)
+  translateInsn(LLInsnStore t vp nval)
   return()
 
 translateStmt (Decr _ (EField _ e1 (Ident s))) = do
@@ -764,9 +785,10 @@ translateStmt (Decr _ (EField _ e1 (Ident s))) = do
   let LLObject sn = t1
   (fm, _, _, _) <- getStructDef sn
   let (idx, t) = fm Map.! s
-  v2 <- translateInsn(LLInsnObjectLoad sn t v1 idx)
+  vp <- translateSimpleExpr (LLInsnObjectGEP sn t v1 idx)
+  v2 <- translateInsn (LLInsnLoad t vp)
   nval <- translateSimpleExpr(LLInsnAdd v2 (LLConstInt (-1)))
-  translateInsn(LLInsnObjectStore sn t v1 idx nval)
+  translateInsn (LLInsnStore t vp nval)
   return()
 
 translateStmt (SExp _ expr) = do 
@@ -835,7 +857,7 @@ translateStmt (While _ expr stmt) = translateWhile expr stmt Set.empty
 translateStmt (For _ t (Ident s) expr stmt) = do
   (v1, t1) <- translateExpr expr
   let LLArray te = t1
-  v2 <- translateInsn (LLInsnArrayLength te v1)
+  v2 <- translateSimpleExpr (LLInsnArrayLength te v1)
   translateFor (convertType t) s v1 te v2 stmt Set.empty
 
 translateStmt (Ret _ expr) = do
@@ -870,6 +892,13 @@ convertType (Latte.Bool _) = LLBool
 convertType (Latte.Void _) = LLVoid
 convertType (Latte.Arr _ t) = LLArray $ convertType t
 convertType (Latte.Struct _ (Ident s)) = LLObject s
+
+initialValue :: LLType -> LLMonad LLVal
+initialValue LLInt = return $ LLConstInt 0
+initialValue LLBool = return $ LLConstBool False
+initialValue LLStr = translateString ""
+initialValue (LLArray _) = return $ LLNull
+initialValue (LLObject _) = return $ LLNull
 
 emitArg :: (Int, Arg Location) -> String
 emitArg (i, Arg _ t _) = emitType (convertType t) ++ " %arg" ++ show i
@@ -920,12 +949,14 @@ emitBlockInsn phiMap (idx, LLInsnCall fun args rtyp) =
     LLVoid -> "    call void @" ++ fun ++ "(" ++ eArgs ++ ")\n"
     _ -> "    %t" ++ show idx ++ " = call " ++ emitType rtyp ++ " @" ++ fun ++ "(" ++ eArgs ++ ")\n"
 
-emitBlockInsn phiMap (idx, LLInsnArrayLoad t v1 v2) =
-  "    %a" ++ show idx ++ " = getelementptr " ++ emitType t ++ ", " ++ emitType t ++ "* " ++ emitVal v1 ++ ", i32 " ++ emitVal v2 ++ "\n    %t" ++ show idx ++ " = load " ++ emitType t ++ ", " ++ emitType t ++ "* %a" ++ show idx ++ "\n"
+emitBlockInsn phiMap (idx, LLInsnArrayGEP t v1 v2) =
+  "    %t" ++ show idx ++ " = getelementptr " ++ emitType t ++ ", " ++ emitType t ++ "* " ++ emitVal v1 ++ ", i32 " ++ emitVal v2 ++ "\n"
 
-emitBlockInsn phiMap (idx, LLInsnArrayStore t v1 v2 v3) =
-  "    %a" ++ show idx ++ " = getelementptr " ++ emitType t ++ ", " ++ emitType t ++ "* " ++ emitVal v1 ++ ", i32 " ++ emitVal v2 ++ "\n" ++ 
-  "    store " ++ emitType t ++" " ++ emitVal v3 ++ ", " ++ emitType t ++ "* %a" ++ show idx ++ "\n"
+emitBlockInsn phiMap (idx, LLInsnLoad t v) =
+  "    %t" ++ show idx ++ " = load " ++ emitType t ++ ", " ++ emitType t ++ "* " ++ emitVal v ++ "\n"
+
+emitBlockInsn phiMap (idx, LLInsnStore t v1 v2) =
+  "    store " ++ emitType t ++" " ++ emitVal v2 ++ ", " ++ emitType t ++ "* " ++ emitVal v1 ++ "\n"
 
 emitBlockInsn phiMap (idx, LLInsnArrayLength t v) =
   "    %c" ++ show idx ++ " = bitcast " ++ emitType t ++ "* " ++ emitVal v ++ " to i32*\n    %a" ++ show idx ++ " = getelementptr i32, i32* %c" ++ show idx ++ ", i32 -1\n    %t" ++ show idx ++ " = load i32, i32* %a" ++ show idx ++ "\n"
@@ -943,32 +974,33 @@ emitBlockInsn phiMap (idx, LLInsnArrayNew t v) =
   "    %a" ++ show idx ++ " = call i8* @$newarrayptr(i32 " ++ emitVal v ++ ")\n" ++
   "    %t" ++ show idx ++ " = bitcast i8* %a" ++ show idx ++ " to " ++ emitType t ++ "*\n"
 
-emitBlockInsn phiMap (idx, LLInsnObjectNew s) = 
-  "    %a" ++ show idx ++ " = getelementptr %struct." ++ s ++ ", %struct." ++ s ++ "* null, i32 1\n    %s" ++ show idx ++ " = ptrtoint %struct." ++ s  ++ "* %a" ++ show idx ++ " to i32\n" ++
-  "    %v" ++ show idx ++ " = call i8* @$newobject(i32 %s" ++ show idx ++ ")\n" ++
+emitBlockInsn phiMap (idx, LLInsnObjectSize s) = 
+  "    %a" ++ show idx ++ " = getelementptr %struct." ++ s ++ ", %struct." ++ s ++ "* null, i32 1\n    %t" ++ show idx ++ " = ptrtoint %struct." ++ s  ++ "* %a" ++ show idx ++ " to i32\n"
+
+emitBlockInsn phiMap (idx, LLInsnObjectNew s v) = 
+  "    %v" ++ show idx ++ " = call i8* @$newobject(i32 " ++ emitVal v ++ ")\n" ++
   "    %t" ++ show idx ++ " = bitcast i8* %v" ++ show idx ++ " to %struct." ++ s ++ "* \n" ++
   "    %p" ++ show idx ++ " = getelementptr %struct." ++ s ++ ", %struct." ++ s ++"* %t" ++ show idx ++ ", i32 0, i32 0\n" ++
   "    store %vtable." ++ s ++ "* @vtable." ++ s ++ ", %vtable." ++ s ++ "** %p" ++ show idx ++ "\n"
 
-emitBlockInsn phiMap (idx, LLInsnObjectLoad s t v i) =
-  "    %p" ++ show idx ++ " = getelementptr %struct." ++ s ++ ", %struct." ++ s ++"* " ++ emitVal v ++ ", i32 0, i32 " ++ show i ++"\n" ++
-  "    %t" ++ show idx ++ " = load " ++ emitType t ++ ", " ++ emitType t ++ "* %p" ++ show idx ++ "\n"
+emitBlockInsn phiMap (idx, LLInsnObjectGEP s t v i) =
+  "    %t" ++ show idx ++ " = getelementptr %struct." ++ s ++ ", %struct." ++ s ++"* " ++ emitVal v ++ ", i32 0, i32 " ++ show i ++"\n"
 
-emitBlockInsn phiMap (idx, LLInsnObjectStore s t v1 i v2) =
-  "    %p" ++ show idx ++ " = getelementptr %struct." ++ s ++ ", %struct." ++ s ++"* " ++ emitVal v1 ++ ", i32 0, i32 " ++ show i ++"\n" ++
-  "    store " ++ emitType t ++" " ++ emitVal v2 ++ ", " ++ emitType t ++ "* %p" ++ show idx ++ "\n"
+emitBlockInsn phiMap (idx, LLInsnGetVTable s v1) = 
+  "    %a" ++ show idx ++ " = getelementptr %struct." ++ s ++ ", %struct." ++ s ++ "* " ++ emitVal v1 ++ ", i32 0, i32 0\n" ++
+  "    %t" ++ show idx ++ " = load %vtable." ++ s ++ "*, %vtable." ++ s ++ "** %a" ++ show idx ++ "\n"
 
-emitBlockInsn phiMap (idx, LLInsnObjectCall s v1 i args rtyp) = 
+emitBlockInsn phiMap (idx, LLInsnGetVMthd s v1 i atypes rtyp) = 
+  let mt = emitType rtyp ++ "(" ++ intercalate ", " (map emitType atypes) ++ ")" ++ "*" in
+  "    %a" ++ show idx ++ " = getelementptr %vtable." ++ s ++ ", %vtable." ++ s ++ "* " ++ emitVal v1 ++ ", i32 0, i32 " ++ show i ++ "\n" ++
+  "    %t" ++ show idx ++ " = load " ++ mt ++ ", " ++ mt ++ "* %a" ++ show idx ++ "\n"
+
+emitBlockInsn phiMap (idx, LLInsnVCall v1 args rtyp) = 
   let mt = emitType rtyp ++ "(" ++ intercalate ", " (map (emitType . snd) args) ++ ")" ++ "*" in
-  let l0 = "    %a" ++ show idx ++ " = getelementptr %struct." ++ s ++ ", %struct." ++ s ++ "* " ++ emitVal v1 ++ ", i32 0, i32 0\n" in
-  let l1 = "    %b" ++ show idx ++ " = load %vtable." ++ s ++ "*, %vtable." ++ s ++ "** %a" ++ show idx ++ "\n" in
-  let l2 = "    %c" ++ show idx ++ " = getelementptr %vtable." ++ s ++ ", %vtable." ++ s ++ "* %b" ++ show idx ++ ", i32 0, i32 " ++ show i ++ "\n" in
-  let l3 = "    %d" ++ show idx ++ " = load " ++ mt ++ ", " ++ mt ++ "* %c" ++ show idx ++ "\n" in
-  let pref = l0 ++ l1 ++ l2 ++ l3 in
   let eArgs = intercalate ", " (map emitCallArg args) in
   case rtyp of
-    LLVoid -> pref ++ "    call void %d" ++ show idx ++ "(" ++ eArgs ++ ")\n"
-    _ -> pref ++ "    %t" ++ show idx ++ " = call " ++ emitType rtyp ++ " %d" ++ show idx ++ "(" ++ eArgs ++ ")\n"
+    LLVoid -> "    call void " ++ emitVal v1 ++ "(" ++ eArgs ++ ")\n"
+    _ -> "    %t" ++ show idx ++ " = call " ++ emitType rtyp ++ " " ++ emitVal v1 ++ "(" ++ eArgs ++ ")\n"
 
 emitBlockInsn phiMap (idx, LLInsnObjectCast t1 t2 v) =
   "    %t" ++ show idx ++ " = bitcast " ++ emitType t1 ++ " " ++ emitVal v ++ " to " ++ emitType t2 ++ "\n"
