@@ -21,7 +21,9 @@ clean:
 	-rm -f src/*.bak src/*.log src/*.aux src/*.hi src/*.o src/*.dvi latc latc_llvm TestLatte
 	-rm -f src/LexLatte.hs src/ParLatte.hs
 	-rm -f examples/*.bc examples/*.ll
+	-rm -f examples/*/*.bc examples/*/*.ll
+	-rm -f examples/*/*/*.bc examples/*/*/*.ll
 	-rm -f lib/runtime.bc
 
 dist: 
-	tar -czf ks386105-latte-backend.tar.gz Makefile README src/  examples/ lib/
+	tar -czf ks386105-latte-final.tar.gz Makefile README src/  examples/ lib/

@@ -276,8 +276,11 @@ checkStmt (While loc expr stmt) = do
 checkStmt (For loc t ident expr stmt) = do
   t1 <- checkType False t
   t2 <- checkRValue expr
-  unless (t2 == TCArray t1) $ throwError (loc, "wrong type of loop variable")
-  local (transformSymbols (Map.insert ident t1) ) $ checkStmt stmt
+  case t2 of
+    TCArray t2e -> do
+      checkCovariantTypes loc t1 t2e
+      local (transformSymbols (Map.insert ident t1) ) $ checkStmt stmt
+    _ -> throwError (loc, "wrong type of loop variable")
 
 
 

@@ -4,5 +4,30 @@ program kompiluje się za pomocą polecenia make, które wywołuje generator lek
 fork bnfc z obsługą lokalizacji w parserze (https://github.com/ksledz/bnfc), sforkowany od https://github.com/Commelina/bnfc, happy, alex, ghc. makefile nie wywołuje bnfc ponieważ bnfc nie ma na studentsie, więc makefile używa już wygenerowanego przez bnfc kodu.
 - struktura katalogów projektu
 w katalogu src/ znajdują się: Latte.cf, pliki wygenerowane przez bnfc, plik zawierający logikę type checkera (TypeChecker.hs) i kompilatora (LLVMCompiler.hs). w katalogu examples/ zawarte są przykłady z treści zadania. W /lib znajduje się używany runtime, napisany w C i kompilujący się do .bc.
-- rozszerzenia 
-TBD
+- optymalizacje
+GCSE, użycie phi, poprawione warunki w pętlach i instrukcjach warunnkowych.
+- rozszerzenia
+kompilator obsługuje tablice i obiekty (atrybuty, metody, dziedziczenie, metody wirtualne).
+- fazy przetwarzania
+  - lekser
+  - parser
+  - type checker
+  - konwersja do llvm
+    - zapamiętanie layoutu klas, typów funkcji i metod
+    - wyemitowanie definicji klas i tabel wirtualnych
+    - wyemitowanie kodu funkcji i metod
+      - przejście przez AST i stworzenie reprezentacji pośredniej (CSE robione po drodze)
+      - konwersja reprezentacji pośredniej na LLVM IR
+    - wyemitowanie globalnych stałych napisowych
+- reprezentacja pośrednia
+stan, trzymany w monadzie LLVMonad w LLState, trzymającym:
+  - listę instrukcji (poza blokami bo GCSE może przenosić instrukcje między blokami)
+  - listę bloków: rodzic w drzewie dominatorów, głębokość w drzewie dominatorów, terminator bloku / informacja o niezakończeniu jeszcze tłumaczenia bloku
+  - obecne: blok i mapa ze zmiennych na wartości / info o braku obecnego bloku (bo return lub inf loop)
+  - lista zmiennych w obecnym scope z poprzednimi wartościami do odtworzenia na końcu scope'a
+  - lista widocznych funkcji globalych (niezmieniana podczas emisji)
+  - lista globalnych stałych napisowych
+  - mapa do GCSE z deduplikowalnych instrukcji na indeks w liście instrukcji
+  - lista klas i ich definicji niezmieniana podczas emisji
+  - informacja, w jakiej klasy metodzie jestesmy lub czy jesteśmy w funkcji globalnej
+  - typ zwracany z obecnej funkcji / metody
